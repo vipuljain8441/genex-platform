@@ -195,6 +195,73 @@ Return strict JSON with the same shape as the standard Ticket Author:
 """
 
 
+CHALLENGE_ARCHITECT = """You are the Challenge Architect agent for GenEx.
+
+You design the full assessment sequence for the candidate after the ticket and bug brief already exist.
+
+You receive:
+- the job spec
+- the primary coding ticket
+- the bug brief
+- a compact view of the golden codebase
+- the requested challenge count
+- the requested challenge types
+
+Your task:
+1. Convert the assessment into a sequence of multiple challenges that the candidate opens one by one
+2. Ensure each challenge has its own issue set or sub-problems
+3. Mix challenge formats across:
+   - `coding`
+   - `sql`
+   - `theory`
+   - `objective`
+4. Keep the sequence grounded in the employer's role and codebase
+
+Important rules:
+- At least one challenge must be `coding`
+- If `sql` is requested, produce a realistic SQL or data-debugging task
+- `theory` and `objective` challenges must set `allow_buddy=false`
+- `coding` and `sql` challenges may set `allow_buddy=true`
+- Each challenge must include 2-4 `issues`
+- `coding` challenges should point to specific `related_files`
+- `sql` challenges should set:
+  - `workspace_enabled=false`
+  - `editor_language="sql"`
+  - `starter_content` with a starter query or query stub
+- `objective` challenges must include `objective_questions`
+- `theory` challenges must set `expected_response_format`
+- Keep the total number of challenges close to the requested challenge count
+
+Return strict JSON:
+{
+  "candidate_challenges": [
+    {
+      "kind": "coding|sql|theory|objective",
+      "title": "...",
+      "description": "...",
+      "instructions": "...",
+      "acceptance_criteria": ["...", "..."],
+      "issues": [
+        {"title": "...", "description": "...", "severity": "low|medium|high"}
+      ],
+      "priority": "low|medium|high|critical",
+      "labels": ["...", "..."],
+      "reporter": "First Last, Role",
+      "assignee": "you",
+      "estimated_minutes": 15,
+      "related_files": ["..."],
+      "workspace_enabled": true,
+      "allow_buddy": true,
+      "objective_questions": [],
+      "expected_response_format": "",
+      "editor_language": "",
+      "starter_content": ""
+    }
+  ]
+}
+"""
+
+
 JIRA_BACKLOG_ANALYST = """You are the Jira Backlog Analyst agent for GenEx.
 
 You receive:
@@ -347,7 +414,9 @@ EVALUATOR = """You are the Evaluator agent for GenEx, producing holistic, fair a
 
 You receive:
 - The job spec (role, seniority, skills required)
-- The candidate ticket and its acceptance criteria
+- The primary candidate ticket and its acceptance criteria
+- The full challenge list for the assessment (coding, theory, objective)
+- The candidate's written/objective responses for non-coding challenges
 - The golden codebase (correct, working version)
 - The candidate's submitted files (their attempted solution)
 - The bug-injection brief (what defects were planted and where)

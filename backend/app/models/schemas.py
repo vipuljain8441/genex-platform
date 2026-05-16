@@ -56,6 +56,13 @@ class CodebaseSource(str, Enum):
     GITHUB = "github"
 
 
+class ChallengeKind(str, Enum):
+    CODING = "coding"
+    SQL = "sql"
+    OBJECTIVE = "objective"
+    THEORY = "theory"
+
+
 # ── Phase 1: Employer intake ──────────────────────────────────────────────────
 
 class RecruiterContext(BaseModel):
@@ -89,6 +96,14 @@ class JobSpec(BaseModel):
     recruiter_context: RecruiterContext | None = None
     codebase_source: CodebaseSource = CodebaseSource.GENERATED
     github_source: GitHubSource | None = None
+    challenge_count: int = 4
+    challenge_types: list[ChallengeKind] = Field(
+        default_factory=lambda: [
+            ChallengeKind.CODING,
+            ChallengeKind.THEORY,
+            ChallengeKind.OBJECTIVE,
+        ]
+    )
 
 
 # ── Phase 1 outputs ───────────────────────────────────────────────────────────
@@ -132,6 +147,49 @@ class CandidateTicket(BaseModel):
     assignee: str = "you"
 
 
+class ObjectiveOption(BaseModel):
+    id: str
+    text: str
+
+
+class ObjectiveQuestion(BaseModel):
+    id: str = Field(default_factory=lambda: _id("Q"))
+    prompt: str
+    options: list[ObjectiveOption]
+    multi_select: bool = False
+    correct_option_ids: list[str] = Field(default_factory=list)
+    explanation: str = ""
+
+
+class ChallengeIssue(BaseModel):
+    id: str = Field(default_factory=lambda: _id("ISS"))
+    title: str
+    description: str = ""
+    severity: Literal["low", "medium", "high"] = "medium"
+
+
+class CandidateChallenge(BaseModel):
+    id: str = Field(default_factory=lambda: _id("CHL"))
+    kind: ChallengeKind
+    title: str
+    description: str = ""
+    instructions: str = ""
+    acceptance_criteria: list[str] = Field(default_factory=list)
+    issues: list[ChallengeIssue] = Field(default_factory=list)
+    priority: Literal["low", "medium", "high", "critical"] = "medium"
+    labels: list[str] = Field(default_factory=list)
+    reporter: str = "Priya Menon"
+    assignee: str = "you"
+    estimated_minutes: int = 15
+    related_files: list[str] = Field(default_factory=list)
+    workspace_enabled: bool = False
+    allow_buddy: bool = False
+    objective_questions: list[ObjectiveQuestion] = Field(default_factory=list)
+    expected_response_format: str = ""
+    editor_language: str = ""
+    starter_content: str = ""
+
+
 # ── Assessment (the top-level employer-side object) ──────────────────────────
 
 class PipelineStage(str, Enum):
@@ -140,6 +198,7 @@ class PipelineStage(str, Enum):
     EXTRACTING = "extracting"
     AUTHORING = "authoring"
     TICKETING = "ticketing"
+    CHALLENGING = "challenging"
     INJECTING = "injecting"
     READY = "ready"
     FAILED = "failed"
@@ -159,6 +218,7 @@ class Assessment(BaseModel):
     golden_codebase: Codebase | None = None
     buggy_codebase: Codebase | None = None
     candidate_ticket: CandidateTicket | None = None
+    candidate_challenges: list[CandidateChallenge] = Field(default_factory=list)
     bug_brief: BugInjectionBrief | None = None
     created_at: datetime = Field(default_factory=_now)
 
@@ -201,7 +261,18 @@ class CandidateSession(BaseModel):
     candidate_name: str = "Candidate"
     started_at: datetime = Field(default_factory=_now)
     submitted_at: datetime | None = None
+    current_challenge_id: str | None = None
     current_files: dict[str, str] = Field(default_factory=dict)  # path → content
+    challenge_responses: dict[str, "ChallengeResponse"] = Field(default_factory=dict)
+
+
+class ChallengeResponse(BaseModel):
+    challenge_id: str
+    challenge_kind: ChallengeKind
+    status: Literal["pending", "in_progress", "completed"] = "pending"
+    answer_text: str = ""
+    selected_option_ids: dict[str, list[str]] = Field(default_factory=dict)
+    updated_at: datetime = Field(default_factory=_now)
 
 
 class EventKind(str, Enum):
@@ -209,6 +280,8 @@ class EventKind(str, Enum):
     FILE_OPEN = "file_open"
     FILE_SWITCH = "file_switch"
     FILE_CLOSE = "file_close"
+    CHALLENGE_SWITCH = "challenge_switch"
+    CHALLENGE_RESPONSE = "challenge_response"
     PANEL_SWITCH = "panel_switch"
     SEARCH_OPEN = "search_open"
     SEARCH_QUERY = "search_query"
@@ -251,6 +324,7 @@ class BuddyTurn(BaseModel):
 class BuddyRequest(BaseModel):
     session_id: str
     question: str
+    challenge_id: str | None = None
     open_file: str | None = None
     selection: str | None = None
     history: list[BuddyTurn] = Field(default_factory=list)
@@ -292,3 +366,6 @@ class EvaluationResult(BaseModel):
     completed_acceptance: list[str]
     missed_acceptance: list[str]
     generated_at: datetime = Field(default_factory=_now)
+
+
+CandidateSession.model_rebuild()

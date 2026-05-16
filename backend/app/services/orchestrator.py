@@ -10,16 +10,17 @@ import logging
 import traceback
 from datetime import datetime, timezone
 
-from app.agents import bug_injector, code_author, extractor, ticket_author
+from app.agents import bug_injector, challenge_architect, code_author, extractor, ticket_author
 from app.agents import github_ticket_author
 from app.models.schemas import (
     Assessment,
     AssessmentStatus,
-    CodebaseSource,
     Codebase,
+    CodebaseSource,
     ExtractedContext,
     PipelineStage,
 )
+from app.services.challenges import build_candidate_challenges
 from app.services.github import build_codebase_from_github, parse_github_url
 from app.store import store
 
@@ -69,6 +70,12 @@ async def _run_generated_pipeline(a: Assessment) -> None:
     brief, ticket = await ticket_author.run(job, a.golden_codebase)
     a.bug_brief = brief
     a.candidate_ticket = ticket
+    await _set_status(a, PipelineStage.CHALLENGING, "Designing the multi-challenge assessment")
+    try:
+        generated_challenges = await challenge_architect.run(job, a.golden_codebase, brief, ticket)
+    except Exception:
+        generated_challenges = []
+    a.candidate_challenges = build_candidate_challenges(job, brief, ticket, generated_challenges)
     await store.put_assessment(a)
 
     await _set_status(a, PipelineStage.INJECTING, "Planting realistic defects")
@@ -98,6 +105,12 @@ async def _run_github_pipeline(a: Assessment) -> None:
     brief, ticket = await github_ticket_author.run(job, golden, gh)
     a.bug_brief = brief
     a.candidate_ticket = ticket
+    await _set_status(a, PipelineStage.CHALLENGING, "Designing the multi-challenge assessment")
+    try:
+        generated_challenges = await challenge_architect.run(job, golden, brief, ticket)
+    except Exception:
+        generated_challenges = []
+    a.candidate_challenges = build_candidate_challenges(job, brief, ticket, generated_challenges)
     await store.put_assessment(a)
 
     await _set_status(a, PipelineStage.INJECTING, "Planting realistic defects")

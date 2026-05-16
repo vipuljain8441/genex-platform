@@ -17,12 +17,23 @@ from pydantic import BaseModel
 from app.models.schemas import (
     ActivityEvent,
     CandidateSession,
+    ChallengeResponse,
     EventKind,
     PipelineStage,
 )
 from app.store import store
 
 router = APIRouter(prefix="/invites", tags=["invites"])
+
+
+def _build_initial_responses(assessment) -> dict[str, ChallengeResponse]:
+    return {
+        challenge.id: ChallengeResponse(
+            challenge_id=challenge.id,
+            challenge_kind=challenge.kind,
+        )
+        for challenge in assessment.candidate_challenges
+    }
 
 
 class AssessmentMini(BaseModel):
@@ -96,7 +107,11 @@ async def accept_invite(token: str, body: AcceptIn) -> AcceptOut:
     session = CandidateSession(
         assessment_id=assessment.id,
         candidate_name=name,
+        current_challenge_id=(
+            assessment.candidate_challenges[0].id if assessment.candidate_challenges else None
+        ),
         current_files={f.path: f.content for f in assessment.buggy_codebase.files},
+        challenge_responses=_build_initial_responses(assessment),
     )
     await store.put_session(session)
     await store.append_event(ActivityEvent(

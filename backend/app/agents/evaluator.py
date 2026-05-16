@@ -7,6 +7,7 @@ from app.core.llm import complete_json
 from app.models.schemas import (
     ActivityEvent,
     BuddyTurn,
+    CandidateChallenge,
     CandidateSession,
     CandidateTicket,
     Codebase,
@@ -55,6 +56,7 @@ def _summarise_events(events: list[ActivityEvent]) -> dict:
 async def run(
     job: JobSpec,
     ticket: CandidateTicket,
+    challenges: list[CandidateChallenge],
     golden: Codebase,
     session: CandidateSession,
     events: list[ActivityEvent],
@@ -79,6 +81,11 @@ async def run(
         {
             "job": job_summary,
             "ticket": ticket.model_dump(),
+            "challenges": [c.model_dump(mode="json") for c in challenges],
+            "challenge_responses": {
+                cid: response.model_dump(mode="json")
+                for cid, response in session.challenge_responses.items()
+            },
             "golden_files": golden_trimmed,
             "candidate_submission": submitted,
             "buddy_chat": buddy_recent,

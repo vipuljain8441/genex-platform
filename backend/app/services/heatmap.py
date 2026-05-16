@@ -18,6 +18,8 @@ _WEIGHTS = {
     "file_switch": 1.0,
     "search_query": 1.5,
     "search_result_open": 1.5,
+    "challenge_switch": 0.75,
+    "challenge_response": 1.5,
     "selection_change": 0.5,
     "cursor_move": 0.25,
     "panel_switch": 0.5,

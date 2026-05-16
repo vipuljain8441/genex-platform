@@ -6,6 +6,7 @@ import shlex
 import shutil
 import tempfile
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
@@ -17,6 +18,7 @@ from app.models.schemas import (
     ActivityEvent,
     Assessment,
     CandidateSession,
+    ChallengeResponse,
     EventKind,
 )
 from app.store import store
@@ -51,6 +53,16 @@ class WorkspaceOut(BaseModel):
     assessment: Assessment
 
 
+def _build_initial_responses(assessment: Assessment) -> dict[str, ChallengeResponse]:
+    return {
+        challenge.id: ChallengeResponse(
+            challenge_id=challenge.id,
+            challenge_kind=challenge.kind,
+        )
+        for challenge in assessment.candidate_challenges
+    }
+
+
 @router.post("/sessions", response_model=WorkspaceOut)
 async def start_session(body: StartSessionIn) -> WorkspaceOut:
     assessment = await store.get_assessment(body.assessment_id)
@@ -60,7 +72,11 @@ async def start_session(body: StartSessionIn) -> WorkspaceOut:
     session = CandidateSession(
         assessment_id=body.assessment_id,
         candidate_name=body.candidate_name,
+        current_challenge_id=(
+            assessment.candidate_challenges[0].id if assessment.candidate_challenges else None
+        ),
         current_files={f.path: f.content for f in assessment.buggy_codebase.files},
+        challenge_responses=_build_initial_responses(assessment),
     )
     await store.put_session(session)
     await store.append_event(
@@ -97,6 +113,79 @@ async def save_file(session_id: str, body: FileEditIn) -> CandidateSession:
     return session
 
 
+class ChallengeResponseIn(BaseModel):
+    status: Literal["pending", "in_progress", "completed"] | None = None
+    answer_text: str | None = None
+    selected_option_ids: dict[str, list[str]] | None = None
+
+
+class CurrentChallengeIn(BaseModel):
+    challenge_id: str
+
+
+@router.put("/sessions/{session_id}/current-challenge", response_model=CandidateSession)
+async def set_current_challenge(session_id: str, body: CurrentChallengeIn) -> CandidateSession:
+    session = await store.get_session(session_id)
+    if not session:
+        raise HTTPException(404, "session not found")
+    assessment = await store.get_assessment(session.assessment_id)
+    if not assessment:
+        raise HTTPException(500, "assessment missing")
+    if body.challenge_id not in {c.id for c in assessment.candidate_challenges}:
+        raise HTTPException(404, "challenge not found")
+    session.current_challenge_id = body.challenge_id
+    await store.put_session(session)
+    await store.append_event(ActivityEvent(
+        session_id=session.id,
+        kind=EventKind.CHALLENGE_SWITCH,
+        payload={"challenge_id": body.challenge_id},
+    ))
+    return session
+
+
+@router.put("/sessions/{session_id}/challenges/{challenge_id}/response", response_model=CandidateSession)
+async def save_challenge_response(
+    session_id: str,
+    challenge_id: str,
+    body: ChallengeResponseIn,
+) -> CandidateSession:
+    session = await store.get_session(session_id)
+    if not session:
+        raise HTTPException(404, "session not found")
+    assessment = await store.get_assessment(session.assessment_id)
+    if not assessment:
+        raise HTTPException(500, "assessment missing")
+    challenge = next((c for c in assessment.candidate_challenges if c.id == challenge_id), None)
+    if not challenge:
+        raise HTTPException(404, "challenge not found")
+
+    response = session.challenge_responses.get(challenge_id) or ChallengeResponse(
+        challenge_id=challenge_id,
+        challenge_kind=challenge.kind,
+    )
+    if body.status is not None:
+        response.status = body.status  # type: ignore[assignment]
+    if body.answer_text is not None:
+        response.answer_text = body.answer_text
+    if body.selected_option_ids is not None:
+        response.selected_option_ids = body.selected_option_ids
+    response.updated_at = datetime.now(timezone.utc)
+    session.challenge_responses[challenge_id] = response
+    await store.put_session(session)
+    await store.append_event(ActivityEvent(
+        session_id=session.id,
+        kind=EventKind.CHALLENGE_RESPONSE,
+        payload={
+            "challenge_id": challenge_id,
+            "challenge_kind": challenge.kind.value,
+            "status": response.status,
+            "answer_chars": len(response.answer_text or ""),
+            "selected_count": sum(len(v) for v in response.selected_option_ids.values()),
+        },
+    ))
+    return session
+
+
 class SubmitOut(BaseModel):
     session_id: str
     status: Literal["evaluating", "done"]
@@ -115,6 +204,7 @@ async def submit(session_id: str) -> SubmitOut:
     result = await evaluator.run(
         job=assessment.job,
         ticket=assessment.candidate_ticket,
+        challenges=assessment.candidate_challenges,
         golden=assessment.golden_codebase,
         session=session,
         events=await store.get_events(session.id),
