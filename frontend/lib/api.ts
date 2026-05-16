@@ -174,6 +174,18 @@ export type JiraAnalysis = {
   source_summary: string;
 };
 
+export type JDAnalysis = {
+  suggested_title: string;
+  suggested_role_family: RoleFamily | string;
+  suggested_seniority: JobSpec["seniority"] | string;
+  suggested_industry: string;
+  problem_summary: string;
+  must_have_skills: string[];
+  nice_to_have_skills: string[];
+  generated_jd: string;
+  recruiter_context: RecruiterContext;
+};
+
 export type PipelineStage =
   | "pending" | "fetching" | "extracting" | "authoring"
   | "challenging"
@@ -298,6 +310,12 @@ export const api = {
     http<GitHubInfo>("/api/employer/github/info", {
       method: "POST",
       body: JSON.stringify({ repo_url }),
+    }),
+
+  analyzeJD: (jd_text: string) =>
+    http<JDAnalysis>("/api/employer/jd/analyze", {
+      method: "POST",
+      body: JSON.stringify({ jd_text }),
     }),
 
   analyzeJira: (body: {

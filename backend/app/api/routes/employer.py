@@ -12,7 +12,7 @@ from pydantic import BaseModel
 
 from app.core.llm import complete_json
 from app.models.schemas import Assessment, Invite, JobSpec, PipelineStage, RecruiterContext
-from app.prompts.library import JIRA_BACKLOG_ANALYST
+from app.prompts.library import JD_ANALYST, JIRA_BACKLOG_ANALYST
 from app.services.email import invite_url as build_invite_url, send_invite_email
 from app.services.github import fetch_issues, fetch_repo_info, parse_github_url
 from app.services.jira import fetch_jira_backlog
@@ -136,6 +136,55 @@ async def analyze_jira_backlog(body: JiraAnalyzeIn) -> JiraAnalysisOut:
         recruiter_context=recruiter_context,
         issues=[JiraIssueOut(**issue) for issue in issues],
         source_summary=f"Analyzed {len(issues)} Jira issues from the employer backlog.",
+    )
+
+
+# ── JD analysis ──────────────────────────────────────────────────────────────
+
+class JDAnalyzeIn(BaseModel):
+    jd_text: str
+
+
+class JDAnalysisOut(BaseModel):
+    suggested_title: str
+    suggested_role_family: str
+    suggested_seniority: str
+    suggested_industry: str
+    problem_summary: str
+    must_have_skills: list[str]
+    nice_to_have_skills: list[str]
+    generated_jd: str
+    recruiter_context: RecruiterContext
+
+
+@router.post("/jd/analyze", response_model=JDAnalysisOut)
+async def analyze_jd(body: JDAnalyzeIn) -> JDAnalysisOut:
+    """Parse a raw job description and extract structured hiring data for the pipeline."""
+    if not body.jd_text or len(body.jd_text.strip()) < 30:
+        raise HTTPException(400, "Job description is too short to analyze.")
+
+    user = (
+        "Job description text:\n"
+        f"{body.jd_text.strip()}\n\n"
+        "Extract the structured hiring profile described in the system prompt. Return strict JSON only."
+    )
+
+    try:
+        data = await complete_json(JD_ANALYST, user, temperature=0.3, max_tokens=2000)
+    except Exception as e:
+        raise HTTPException(502, f"JD analysis failed: {e}")
+
+    recruiter_context = RecruiterContext(**(data.get("recruiter_context") or {}))
+    return JDAnalysisOut(
+        suggested_title=(data.get("suggested_title") or "Software Engineer").strip(),
+        suggested_role_family=(data.get("suggested_role_family") or "backend").strip(),
+        suggested_seniority=(data.get("suggested_seniority") or "mid").strip(),
+        suggested_industry=(data.get("suggested_industry") or "").strip(),
+        problem_summary=(data.get("problem_summary") or recruiter_context.domain_summary).strip(),
+        must_have_skills=_clean_str_list(data.get("must_have_skills")),
+        nice_to_have_skills=_clean_str_list(data.get("nice_to_have_skills")),
+        generated_jd=(data.get("generated_jd") or body.jd_text).strip(),
+        recruiter_context=recruiter_context,
     )
 
 

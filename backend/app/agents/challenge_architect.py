@@ -45,8 +45,28 @@ async def run(
         default=str,
     )
     data = await complete_json(CHALLENGE_ARCHITECT, user, temperature=0.5, max_tokens=3500)
+
+    # Tolerate alternate key names from different fallback models
+    challenges_raw = (
+        data.get("candidate_challenges")
+        or data.get("challenges")
+        or data.get("assessment_challenges")
+        or []
+    )
+    # If model wrapped everything under a parent key, look one level deep
+    if not challenges_raw:
+        for v in data.values():
+            if isinstance(v, list) and v:
+                challenges_raw = v
+                break
+            if isinstance(v, dict):
+                for k in ("candidate_challenges", "challenges"):
+                    if isinstance(v.get(k), list):
+                        challenges_raw = v[k]
+                        break
+
     out: list[CandidateChallenge] = []
-    for raw in data.get("candidate_challenges", []):
+    for raw in challenges_raw:
         if "issues" in raw:
             raw["issues"] = [ChallengeIssue(**issue).model_dump(mode="json") for issue in raw["issues"]]
         if "objective_questions" in raw:

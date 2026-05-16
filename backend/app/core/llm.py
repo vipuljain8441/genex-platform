@@ -55,11 +55,12 @@ def get_openai_client() -> AsyncOpenAI:
 _RATE_LIMIT_BACKOFF = (5, 15, 30)  # seconds between retries
 
 # Groq fallback model chain — tried when the primary model hits quota limits.
-# qwen3-32b and llama-4-scout have large context windows and separate quota pools.
+# Avoid qwen3-* models: thinking mode is on by default and Groq does not expose
+# a supported API to disable it, causing unpredictable JSON structure in responses.
 _GROQ_FALLBACK_MODELS = [
-    "qwen/qwen3-32b",                              # 32B, strong code understanding
-    "meta-llama/llama-4-scout-17b-16e-instruct",   # Llama 4 Scout, separate pool
-    "llama-3.1-8b-instant",                         # small model, last resort
+    "meta-llama/llama-4-scout-17b-16e-instruct",   # Llama 4 Scout, separate quota pool
+    "meta-llama/llama-4-maverick-17b-128e-instruct", # Llama 4 Maverick, another pool
+    "llama-3.1-8b-instant",                          # small model, last resort
 ]
 
 # 400 error codes that mean "this model can't be used" — skip to next, don't raise
