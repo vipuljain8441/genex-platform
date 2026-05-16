@@ -1,3 +1,5 @@
+import type { ReportData } from "./report-types";
+
 const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 const WS = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8000";
 
@@ -304,6 +306,8 @@ export const api = {
       evaluation: any | null;
       heatmap: any;
     }>(`/api/results/${sid}`),
+  getReport: (sid: string) =>
+    http<ReportData>(`/api/results/${sid}/report`),
 
   // ── GitHub ──────────────────────────────────────────────────────────────
   getGitHubInfo: (repo_url: string) =>
