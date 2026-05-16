@@ -18,7 +18,7 @@ from app.models.schemas import (
     CandidateSession,
     EventKind,
 )
-from app.store.memory import store
+from app.store import store
 
 router = APIRouter(prefix="/candidate", tags=["candidate"])
 
@@ -52,7 +52,7 @@ class WorkspaceOut(BaseModel):
 
 @router.post("/sessions", response_model=WorkspaceOut)
 async def start_session(body: StartSessionIn) -> WorkspaceOut:
-    assessment = store.get_assessment(body.assessment_id)
+    assessment = await store.get_assessment(body.assessment_id)
     if not assessment or not assessment.buggy_codebase:
         raise HTTPException(404, "assessment not ready")
 
@@ -61,8 +61,8 @@ async def start_session(body: StartSessionIn) -> WorkspaceOut:
         candidate_name=body.candidate_name,
         current_files={f.path: f.content for f in assessment.buggy_codebase.files},
     )
-    store.put_session(session)
-    store.append_event(
+    await store.put_session(session)
+    await store.append_event(
         ActivityEvent(session_id=session.id, kind=EventKind.FILE_OPEN,
                       file_path=assessment.buggy_codebase.entry_point
                       or assessment.buggy_codebase.files[0].path)
@@ -72,10 +72,10 @@ async def start_session(body: StartSessionIn) -> WorkspaceOut:
 
 @router.get("/sessions/{session_id}", response_model=WorkspaceOut)
 async def get_session(session_id: str) -> WorkspaceOut:
-    session = store.get_session(session_id)
+    session = await store.get_session(session_id)
     if not session:
         raise HTTPException(404, "session not found")
-    assessment = store.get_assessment(session.assessment_id)
+    assessment = await store.get_assessment(session.assessment_id)
     if not assessment:
         raise HTTPException(500, "assessment missing")
     return WorkspaceOut(session=session, assessment=assessment)
@@ -88,11 +88,11 @@ class FileEditIn(BaseModel):
 
 @router.put("/sessions/{session_id}/files", response_model=CandidateSession)
 async def save_file(session_id: str, body: FileEditIn) -> CandidateSession:
-    session = store.get_session(session_id)
+    session = await store.get_session(session_id)
     if not session:
         raise HTTPException(404, "session not found")
     session.current_files[body.path] = body.content
-    store.put_session(session)
+    await store.put_session(session)
     return session
 
 
@@ -103,23 +103,23 @@ class SubmitOut(BaseModel):
 
 @router.post("/sessions/{session_id}/submit", response_model=SubmitOut)
 async def submit(session_id: str) -> SubmitOut:
-    session = store.get_session(session_id)
+    session = await store.get_session(session_id)
     if not session:
         raise HTTPException(404, "session not found")
-    assessment = store.get_assessment(session.assessment_id)
+    assessment = await store.get_assessment(session.assessment_id)
     if not assessment or not assessment.candidate_ticket or not assessment.golden_codebase:
         raise HTTPException(500, "assessment incomplete")
 
-    store.append_event(ActivityEvent(session_id=session.id, kind=EventKind.SUBMIT))
+    await store.append_event(ActivityEvent(session_id=session.id, kind=EventKind.SUBMIT))
     result = await evaluator.run(
         job=assessment.job,
         ticket=assessment.candidate_ticket,
         golden=assessment.golden_codebase,
         session=session,
-        events=store.get_events(session.id),
-        buddy_history=store.get_buddy_history(session.id),
+        events=await store.get_events(session.id),
+        buddy_history=await store.get_buddy_history(session.id),
     )
-    store.put_evaluation(result)
+    await store.put_evaluation(result)
     return SubmitOut(session_id=session.id, status="done")
 
 
@@ -145,7 +145,7 @@ async def run_file(session_id: str, body: RunIn) -> RunOut:
     - Local-process execution, no container — fine for hackathon, not for prod.
     - 10s timeout, capped output, no network restrictions.
     """
-    session = store.get_session(session_id)
+    session = await store.get_session(session_id)
     if not session:
         raise HTTPException(404, "session not found")
     if body.file_path not in session.current_files:
@@ -217,7 +217,7 @@ async def run_file(session_id: str, body: RunIn) -> RunOut:
         )
 
     # Activity event so the heatmap captures "ran code" intensity per file.
-    store.append_event(ActivityEvent(
+    await store.append_event(ActivityEvent(
         session_id=session.id,
         kind=EventKind.RUN,
         file_path=body.file_path,

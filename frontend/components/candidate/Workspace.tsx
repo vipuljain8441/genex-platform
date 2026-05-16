@@ -61,6 +61,10 @@ export function Workspace({
   const saveDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastEditLen = useRef<Record<string, number>>({});
 
+  function persistFileBestEffort(path: string, content: string) {
+    api.saveFile(sessionId, path, content).catch((_error) => undefined);
+  }
+
   useEffect(() => {
     monitor.start(sessionId);
     monitor.event("file_open", openFile);
@@ -88,7 +92,7 @@ export function Workspace({
     setFilesContent((prev) => ({ ...prev, [path]: content }));
     if (saveDebounce.current) clearTimeout(saveDebounce.current);
     saveDebounce.current = setTimeout(() => {
-      api.saveFile(sessionId, path, content).catch(() => {/* best effort */});
+      persistFileBestEffort(path, content);
     }, 600);
   }
 
@@ -99,7 +103,9 @@ export function Workspace({
       clearTimeout(saveDebounce.current);
       try {
         await api.saveFile(sessionId, openFile, filesContent[openFile] || "");
-      } catch {/* best effort */}
+      } catch (_error) {
+        // best effort
+      }
     }
     setRunOpen(true);
     setRunBusy(true);
@@ -126,7 +132,7 @@ export function Workspace({
     // Replace in editor, persist, switch to that file so the candidate sees the change,
     // and emit a monitored event so the evaluator can later compute AI Catch Rate.
     setFilesContent((prev) => ({ ...prev, [filePath]: newContent }));
-    api.saveFile(sessionId, filePath, newContent).catch(() => {/* best effort */});
+    persistFileBestEffort(filePath, newContent);
     monitor.event("edit", filePath, {
       source: "buddy_apply",
       rationale,

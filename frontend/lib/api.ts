@@ -26,20 +26,75 @@ export type RecruiterContext = {
   additional_tech_notes: string;
 };
 
+export type GitHubSource = {
+  repo_url: string;
+  branch: string;
+  issue_number?: number | null;
+  issue_title?: string;
+  issue_body?: string;
+};
+
 export type JobSpec = {
   title: string;
   role_family: RoleFamily;
   seniority: "junior" | "mid" | "senior" | "staff";
+  industry?: string;
   must_have_skills: string[];
   nice_to_have_skills: string[];
   jd_text: string;
   duration_minutes: number;
   pm_tool: "jira" | "linear" | "github" | "none";
   recruiter_context?: RecruiterContext | null;
+  codebase_source?: "generated" | "github";
+  github_source?: GitHubSource | null;
+};
+
+export type GitHubIssue = {
+  number: number;
+  title: string;
+  body: string;
+  labels: string[];
+  state: string;
+};
+
+export type GitHubInfo = {
+  full_name: string;
+  description: string;
+  default_branch: string;
+  language: string;
+  topics: string[];
+  issues: GitHubIssue[];
+};
+
+export type JiraIssue = {
+  key: string;
+  title: string;
+  summary: string;
+  status: string;
+  issue_type: string;
+  priority: string;
+  labels: string[];
+  components: string[];
+  project: string;
+  updated: string;
+};
+
+export type JiraAnalysis = {
+  suggested_title: string;
+  suggested_role_family: RoleFamily | string;
+  suggested_seniority: JobSpec["seniority"] | string;
+  suggested_industry: string;
+  problem_summary: string;
+  must_have_skills: string[];
+  nice_to_have_skills: string[];
+  generated_jd: string;
+  recruiter_context: RecruiterContext;
+  issues: JiraIssue[];
+  source_summary: string;
 };
 
 export type PipelineStage =
-  | "pending" | "extracting" | "authoring"
+  | "pending" | "fetching" | "extracting" | "authoring"
   | "ticketing" | "injecting" | "ready" | "failed";
 
 export type Assessment = {
@@ -138,6 +193,31 @@ export const api = {
       evaluation: any | null;
       heatmap: any;
     }>(`/api/results/${sid}`),
+
+  // ── GitHub ──────────────────────────────────────────────────────────────
+  getGitHubInfo: (repo_url: string) =>
+    http<GitHubInfo>("/api/employer/github/info", {
+      method: "POST",
+      body: JSON.stringify({ repo_url }),
+    }),
+
+  analyzeJira: (body: {
+    base_url: string;
+    user_email: string;
+    api_token: string;
+    project_key?: string;
+    jql?: string;
+    max_issues?: number;
+    title?: string;
+    jd_text?: string;
+    industry?: string;
+    role_family_hint?: string;
+    seniority_hint?: string;
+  }) =>
+    http<JiraAnalysis>("/api/employer/jira/analyze", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
 
   // ── Invites ─────────────────────────────────────────────────────────────
   createInvites: (

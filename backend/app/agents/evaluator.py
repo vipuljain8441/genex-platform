@@ -16,6 +16,21 @@ from app.models.schemas import (
 )
 from app.prompts.library import EVALUATOR
 
+# Keep token budget manageable across model tiers
+_MAX_FILE_CHARS = 2000
+_MAX_FILES = 8
+_MAX_BUDDY_TURNS = 10
+
+
+def _trim_files(files: list[dict]) -> list[dict]:
+    out = []
+    for f in files[:_MAX_FILES]:
+        content = f.get("content", "")
+        if len(content) > _MAX_FILE_CHARS:
+            content = content[:_MAX_FILE_CHARS] + "\n# ...(truncated for evaluation)"
+        out.append({**f, "content": content})
+    return out
+
 
 def _summarise_events(events: list[ActivityEvent]) -> dict:
     by_kind: dict[str, int] = {}
@@ -45,20 +60,34 @@ async def run(
     events: list[ActivityEvent],
     buddy_history: list[BuddyTurn],
 ) -> EvaluationResult:
-    submitted = [{"path": p, "content": c} for p, c in session.current_files.items()]
+    submitted = [
+        {"path": p, "content": c[:_MAX_FILE_CHARS]}
+        for p, c in session.current_files.items()
+    ]
+    golden_trimmed = _trim_files([f.model_dump() for f in golden.files])
+    buddy_recent = [t.model_dump() for t in buddy_history[-_MAX_BUDDY_TURNS:]]
+
+    # Compact job representation — only what the evaluator needs
+    job_summary = {
+        "title": job.title,
+        "role_family": job.role_family,
+        "seniority": job.seniority,
+        "must_have_skills": job.must_have_skills,
+    }
+
     user = json.dumps(
         {
-            "job": job.model_dump(),
+            "job": job_summary,
             "ticket": ticket.model_dump(),
-            "golden_files": [f.model_dump() for f in golden.files],
+            "golden_files": golden_trimmed,
             "candidate_submission": submitted,
-            "buddy_chat": [t.model_dump() for t in buddy_history],
+            "buddy_chat": buddy_recent,
             "activity_summary": _summarise_events(events),
         },
         indent=2,
         default=str,
     )
-    data = await complete_json(EVALUATOR, user, temperature=0.3, max_tokens=3000)
+    data = await complete_json(EVALUATOR, user, temperature=0.3, max_tokens=2000)
     return EvaluationResult(
         session_id=session.id,
         overall_score=float(data["overall_score"]),

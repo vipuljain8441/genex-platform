@@ -18,7 +18,7 @@ from app.models.schemas import (
 )
 
 
-class Store:
+class MemoryStore:
     def __init__(self) -> None:
         self.assessments: dict[str, Assessment] = {}
         self.sessions: dict[str, CandidateSession] = {}
@@ -31,56 +31,62 @@ class Store:
         self._assessment_subs: dict[str, list[asyncio.Queue]] = defaultdict(list)
         self._session_subs: dict[str, list[asyncio.Queue]] = defaultdict(list)
 
+    async def startup(self) -> None:
+        return None
+
+    async def shutdown(self) -> None:
+        return None
+
     # ── Assessments ───────────────────────────────────────────────────────
-    def put_assessment(self, assessment: Assessment) -> None:
+    async def put_assessment(self, assessment: Assessment) -> None:
         self.assessments[assessment.id] = assessment
         self._publish_assessment(assessment)
 
-    def get_assessment(self, assessment_id: str) -> Assessment | None:
+    async def get_assessment(self, assessment_id: str) -> Assessment | None:
         return self.assessments.get(assessment_id)
 
-    def list_assessments(self) -> list[Assessment]:
+    async def list_assessments(self) -> list[Assessment]:
         return list(self.assessments.values())
 
     # ── Sessions ──────────────────────────────────────────────────────────
-    def put_session(self, session: CandidateSession) -> None:
+    async def put_session(self, session: CandidateSession) -> None:
         self.sessions[session.id] = session
 
-    def get_session(self, session_id: str) -> CandidateSession | None:
+    async def get_session(self, session_id: str) -> CandidateSession | None:
         return self.sessions.get(session_id)
 
     # ── Events ────────────────────────────────────────────────────────────
-    def append_event(self, event: ActivityEvent) -> None:
+    async def append_event(self, event: ActivityEvent) -> None:
         self.events[event.session_id].append(event)
         self._publish_event(event)
 
-    def get_events(self, session_id: str) -> list[ActivityEvent]:
+    async def get_events(self, session_id: str) -> list[ActivityEvent]:
         return list(self.events.get(session_id, []))
 
     # ── Buddy ─────────────────────────────────────────────────────────────
-    def append_buddy_turn(self, session_id: str, turn: BuddyTurn) -> None:
+    async def append_buddy_turn(self, session_id: str, turn: BuddyTurn) -> None:
         self.buddy_history[session_id].append(turn)
 
-    def get_buddy_history(self, session_id: str) -> list[BuddyTurn]:
+    async def get_buddy_history(self, session_id: str) -> list[BuddyTurn]:
         return list(self.buddy_history.get(session_id, []))
 
     # ── Evaluation ────────────────────────────────────────────────────────
-    def put_evaluation(self, result: EvaluationResult) -> None:
+    async def put_evaluation(self, result: EvaluationResult) -> None:
         self.evaluations[result.session_id] = result
 
-    def get_evaluation(self, session_id: str) -> EvaluationResult | None:
+    async def get_evaluation(self, session_id: str) -> EvaluationResult | None:
         return self.evaluations.get(session_id)
 
     # ── Invites ───────────────────────────────────────────────────────────
-    def put_invite(self, invite: Invite) -> None:
+    async def put_invite(self, invite: Invite) -> None:
         self.invites[invite.token] = invite
         if invite.token not in self.invites_by_assessment[invite.assessment_id]:
             self.invites_by_assessment[invite.assessment_id].append(invite.token)
 
-    def get_invite(self, token: str) -> Invite | None:
+    async def get_invite(self, token: str) -> Invite | None:
         return self.invites.get(token)
 
-    def list_invites_for_assessment(self, assessment_id: str) -> list[Invite]:
+    async def list_invites_for_assessment(self, assessment_id: str) -> list[Invite]:
         return [
             self.invites[t]
             for t in self.invites_by_assessment.get(assessment_id, [])
@@ -113,6 +119,3 @@ class Store:
                 yield await q.get()
         finally:
             self._session_subs[session_id].remove(q)
-
-
-store = Store()

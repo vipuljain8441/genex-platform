@@ -51,18 +51,28 @@ class DefectKind(str, Enum):
     GAP = "gap"
 
 
+class CodebaseSource(str, Enum):
+    GENERATED = "generated"
+    GITHUB = "github"
+
+
 # ── Phase 1: Employer intake ──────────────────────────────────────────────────
 
 class RecruiterContext(BaseModel):
-    """Hand-entered context the recruiter provides when no PM tool is connected.
-
-    Lets us ground the assessment in *real* team specifics instead of letting
-    the Extractor agent hallucinate tickets out of thin air.
-    """
+    """Hand-entered context the recruiter provides when no PM tool is connected."""
     domain_summary: str = ""
     sample_ticket_titles: list[str] = Field(default_factory=list)
     common_bug_patterns: str = ""
     additional_tech_notes: str = ""
+
+
+class GitHubSource(BaseModel):
+    """Public GitHub repo to use as the golden codebase instead of generating one."""
+    repo_url: str
+    branch: str = "main"
+    issue_number: int | None = None
+    issue_title: str = ""
+    issue_body: str = ""
 
 
 class JobSpec(BaseModel):
@@ -70,12 +80,15 @@ class JobSpec(BaseModel):
     title: str
     role_family: RoleFamily
     seniority: Literal["junior", "mid", "senior", "staff"] = "mid"
+    industry: str = ""
     must_have_skills: list[str] = Field(default_factory=list)
     nice_to_have_skills: list[str] = Field(default_factory=list)
     jd_text: str
     duration_minutes: int = 60
     pm_tool: Literal["jira", "linear", "github", "none"] = "jira"
     recruiter_context: RecruiterContext | None = None
+    codebase_source: CodebaseSource = CodebaseSource.GENERATED
+    github_source: GitHubSource | None = None
 
 
 # ── Phase 1 outputs ───────────────────────────────────────────────────────────
@@ -123,6 +136,7 @@ class CandidateTicket(BaseModel):
 
 class PipelineStage(str, Enum):
     PENDING = "pending"
+    FETCHING = "fetching"
     EXTRACTING = "extracting"
     AUTHORING = "authoring"
     TICKETING = "ticketing"

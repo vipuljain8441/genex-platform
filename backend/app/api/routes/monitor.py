@@ -6,7 +6,7 @@ import logging
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 
 from app.models.schemas import ActivityEvent, EventKind
-from app.store.memory import store
+from app.store import store
 from pydantic import BaseModel
 
 log = logging.getLogger(__name__)
@@ -22,7 +22,7 @@ class EventIn(BaseModel):
 
 @router.post("/events", response_model=ActivityEvent)
 async def record_event(body: EventIn) -> ActivityEvent:
-    if not store.get_session(body.session_id):
+    if not await store.get_session(body.session_id):
         raise HTTPException(404, "session not found")
     event = ActivityEvent(
         session_id=body.session_id,
@@ -30,13 +30,13 @@ async def record_event(body: EventIn) -> ActivityEvent:
         file_path=body.file_path,
         payload=body.payload,
     )
-    store.append_event(event)
+    await store.append_event(event)
     return event
 
 
 @router.get("/events/{session_id}", response_model=list[ActivityEvent])
 async def list_events(session_id: str) -> list[ActivityEvent]:
-    return store.get_events(session_id)
+    return await store.get_events(session_id)
 
 
 @router.websocket("/sessions/{session_id}/stream")

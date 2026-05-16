@@ -20,7 +20,7 @@ from app.models.schemas import (
     EventKind,
     PipelineStage,
 )
-from app.store.memory import store
+from app.store import store
 
 router = APIRouter(prefix="/invites", tags=["invites"])
 
@@ -44,10 +44,10 @@ class InviteView(BaseModel):
 
 @router.get("/{token}", response_model=InviteView)
 async def get_invite(token: str) -> InviteView:
-    invite = store.get_invite(token)
+    invite = await store.get_invite(token)
     if not invite:
         raise HTTPException(404, "invite not found")
-    assessment = store.get_assessment(invite.assessment_id)
+    assessment = await store.get_assessment(invite.assessment_id)
     if not assessment:
         raise HTTPException(404, "assessment not found")
     return InviteView(
@@ -77,15 +77,15 @@ class AcceptOut(BaseModel):
 
 @router.post("/{token}/accept", response_model=AcceptOut)
 async def accept_invite(token: str, body: AcceptIn) -> AcceptOut:
-    invite = store.get_invite(token)
+    invite = await store.get_invite(token)
     if not invite:
         raise HTTPException(404, "invite not found")
-    assessment = store.get_assessment(invite.assessment_id)
+    assessment = await store.get_assessment(invite.assessment_id)
     if not assessment or not assessment.buggy_codebase:
         raise HTTPException(400, "assessment is not ready yet")
 
     # Idempotent — if the candidate already accepted, return the existing session.
-    if invite.session_id and store.get_session(invite.session_id):
+    if invite.session_id and await store.get_session(invite.session_id):
         return AcceptOut(session_id=invite.session_id, assessment_id=assessment.id)
 
     name = (
@@ -98,8 +98,8 @@ async def accept_invite(token: str, body: AcceptIn) -> AcceptOut:
         candidate_name=name,
         current_files={f.path: f.content for f in assessment.buggy_codebase.files},
     )
-    store.put_session(session)
-    store.append_event(ActivityEvent(
+    await store.put_session(session)
+    await store.append_event(ActivityEvent(
         session_id=session.id,
         kind=EventKind.FILE_OPEN,
         file_path=assessment.buggy_codebase.entry_point or assessment.buggy_codebase.files[0].path,
@@ -107,6 +107,6 @@ async def accept_invite(token: str, body: AcceptIn) -> AcceptOut:
 
     invite.accepted_at = datetime.now(timezone.utc)
     invite.session_id = session.id
-    store.put_invite(invite)
+    await store.put_invite(invite)
 
     return AcceptOut(session_id=session.id, assessment_id=assessment.id)

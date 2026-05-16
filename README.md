@@ -33,17 +33,19 @@ Unlike traditional MCQ/coding tests, GenEx drops candidates into a **realistic d
 
 ### Tech stack
 
-- **Backend** — Python 3.11+, FastAPI, Pydantic v2, Groq SDK, WebSockets
+- **Backend** — Python 3.11+, FastAPI, Pydantic v2, Groq/OpenAI-compatible LLM client, WebSockets
 - **Frontend** — Next.js 15 (App Router), React 19, Tailwind v4, Framer Motion, Monaco Editor, Zustand
-- **Storage** — In-memory async store (Postgres-ready adapter)
-- **LLM** — Groq · `llama-3.3-70b-versatile` (configurable — swap the model in `.env`)
+- **Storage** — Async pluggable store (`memory` or `postgres`)
+- **LLM** — Configurable provider. Groq is supported, and local OpenAI-compatible endpoints such as Ollama-hosted `qwen2.5-coder:0.5b` are supported too.
 
 ## Getting started
 
 ### Prerequisites
 - Python 3.11+
 - Node.js 20+
-- A Groq API key — free at [console.groq.com](https://console.groq.com/keys)
+- Either:
+  - a Groq API key
+  - or a local OpenAI-compatible endpoint such as Ollama serving `qwen2.5-coder:0.5b`
 
 ### Backend
 
@@ -67,6 +69,17 @@ npm run dev
 
 Open http://localhost:3000.
 
+## Single sandbox environment
+
+The repo now includes a bind-mounted Docker/Dev Container setup for a single
+workspace environment plus Postgres and an OpenAI-compatible model endpoint.
+
+See:
+
+- `docs/single-sandbox-environment.md`
+- `.devcontainer/devcontainer.json`
+- `docker-compose.yml`
+
 ## Project layout
 
 ```
@@ -79,7 +92,7 @@ genex-platform/
 │       ├── models/        # Pydantic schemas
 │       ├── prompts/       # System prompts for each agent
 │       ├── services/      # Orchestrator, heatmap, monitor
-│       └── store/         # In-memory store (DB-ready)
+│       └── store/         # Async store backends
 └── frontend/
     ├── app/               # Next.js routes
     │   ├── employer/

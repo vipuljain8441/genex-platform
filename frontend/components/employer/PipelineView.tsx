@@ -16,15 +16,16 @@ import { cn, shortId } from "@/lib/utils";
 import { InviteCard } from "./InviteCard";
 
 const STAGES: { key: PipelineStage; label: string; agent: string }[] = [
-  { key: "extracting", label: "Reading PM tool", agent: "Extractor" },
-  { key: "authoring", label: "Writing golden artifact", agent: "Code Author" },
+  { key: "fetching", label: "Fetching GitHub repository", agent: "GitHub Fetcher" },
+  { key: "extracting", label: "Reading PM tool / context", agent: "Extractor" },
+  { key: "authoring", label: "Generating production codebase", agent: "Code Author" },
   { key: "ticketing", label: "Drafting candidate ticket", agent: "Ticket Author" },
   { key: "injecting", label: "Planting realistic defects", agent: "Bug Injector" },
   { key: "ready", label: "Assessment ready", agent: "—" },
 ];
 
 const ORDER: PipelineStage[] = [
-  "pending", "extracting", "authoring", "ticketing", "injecting", "ready",
+  "pending", "fetching", "extracting", "authoring", "ticketing", "injecting", "ready",
 ];
 
 function stageIndex(s: PipelineStage) {
@@ -60,7 +61,10 @@ export function PipelineView({ initial }: { initial: Assessment }) {
             {a.job.title}
           </h1>
           <p className="mt-1 text-bone/55 text-sm capitalize">
-            {a.job.role_family} · {a.job.seniority} · {a.job.duration_minutes} min · PM: {a.job.pm_tool}
+            {a.job.role_family} · {a.job.seniority}
+            {(a.job as any).industry ? ` · ${(a.job as any).industry}` : ""}
+            {" "}· {a.job.duration_minutes} min
+            {" "}· {(a.job as any).codebase_source === "github" ? "GitHub repo" : "AI-generated"}
           </p>
         </div>
 
