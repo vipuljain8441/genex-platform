@@ -111,6 +111,72 @@ LOG_LEVEL=INFO
 APP_BASE_URL=http://localhost:3000
 ```
 
+### 2.1 Configure the model provider
+
+This project supports two model setups:
+
+#### Option A: Use Groq
+
+Use Groq if you want a hosted model and do not want to run a model locally.
+
+Set this in `backend/.env`:
+
+```env
+LLM_PROVIDER=groq
+LLM_API_KEY=your_groq_api_key
+LLM_MODEL=llama-3.3-70b-versatile
+```
+
+How it works:
+
+- `LLM_PROVIDER=groq` tells the backend to call Groq
+- `LLM_API_KEY` is your Groq key
+- `LLM_MODEL` is the Groq model name
+
+#### Option B: Use Ollama locally
+
+Use Ollama if you want the model to run on your machine.
+
+1. Install and start Ollama
+2. Pull the model used by this project:
+
+```bash
+ollama pull qwen2.5-coder:0.5b
+```
+
+3. Verify the model is available:
+
+```bash
+ollama list
+```
+
+4. Set this in `backend/.env`:
+
+```env
+LLM_PROVIDER=openai_compatible
+LLM_API_KEY=ollama
+LLM_MODEL=qwen2.5-coder:0.5b
+LLM_API_BASE=http://localhost:11434/v1
+```
+
+How it works:
+
+- `LLM_PROVIDER=openai_compatible` makes the backend talk to an OpenAI-style API
+- `LLM_API_BASE=http://localhost:11434/v1` points to Ollama
+- `LLM_MODEL=qwen2.5-coder:0.5b` tells the app which local model to use
+
+If you want to use a different Ollama model, pull it first and then change only `LLM_MODEL`.
+
+Example:
+
+```bash
+ollama pull qwen2.5-coder:1.5b
+```
+
+```env
+LLM_MODEL=qwen2.5-coder:1.5b
+```
+
 Now start the API:
 
 ```bash
@@ -181,6 +247,18 @@ The Docker setup is already wired to use:
 - `LLM_API_BASE=http://ollama:11434/v1`
 - `LLM_MODEL=qwen2.5-coder:0.5b`
 
+The first time you use Docker Compose with Ollama, pull the model once:
+
+```bash
+docker compose exec ollama ollama pull qwen2.5-coder:0.5b
+```
+
+You can verify the model endpoint with:
+
+```bash
+curl http://localhost:11434/v1/models -H "Authorization: Bearer ollama"
+```
+
 Related files:
 
 - `docker-compose.yml`
@@ -192,7 +270,7 @@ Related files:
 - If the frontend loads but API calls fail, make sure the backend is running on port `8000`
 - If CORS errors appear, confirm `ALLOW_ORIGINS=http://localhost:3000` in `backend/.env`
 - If Groq requests fail, verify your `LLM_API_KEY` or `GROQ_API_KEY`
-- If using Ollama, make sure the Ollama server is running and the model is available locally
+- If using Ollama, make sure the Ollama server is running and the model in `LLM_MODEL` has been pulled already
 
 ## Project layout
 
