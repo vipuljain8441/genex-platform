@@ -11,23 +11,31 @@ import type { ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import {
+  ArrowLeft,
   Clock,
   FileCode2,
   FolderTree,
+  ListChecks,
   Loader2,
   Play,
   Search,
   Send,
-  Ticket,
   X,
 } from "lucide-react";
-import { api, type CommandResult } from "@/lib/api";
+import {
+  api,
+  type CandidateChallenge,
+  type ChallengeResponse,
+  type CommandResult,
+  type ObjectiveQuestion,
+} from "@/lib/api";
 import { monitor, type MonitorEvent } from "@/lib/monitor";
 import { Logo } from "@/components/ui/Logo";
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
 import { cn } from "@/lib/utils";
-import { TicketPanel } from "./TicketPanel";
+import { ChallengeOverview } from "./ChallengeOverview";
+import { ChallengePanel } from "./ChallengePanel";
 import { FileTree } from "./FileTree";
 import { SearchPanel, type SearchMatch } from "./SearchPanel";
 import { CodeEditor } from "./CodeEditor";
@@ -41,13 +49,16 @@ import {
 type WorkspaceProps = {
   sessionId: string;
   assessmentId: string;
-  ticket: any;
+  challenges: CandidateChallenge[];
   initialFiles: { path: string; language: string; content: string }[];
   entryPoint: string | null;
   durationMinutes: number;
+  initialChallengeId: string | null;
+  initialResponses: Record<string, ChallengeResponse>;
 };
 
-type PanelMode = "explorer" | "search" | "ticket";
+type PanelMode = "explorer" | "search" | "challenges";
+type ViewMode = "overview" | "workspace";
 
 const RUNNABLE_EXTS = new Set([".py", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".sh"]);
 
@@ -87,6 +98,10 @@ function summarizeEvent(event: MonitorEvent): ActivityFeedEntry | null {
       return makeActivity("Opened terminal", stringifyPayload(event.payload), event.client_at);
     case "terminal_clear":
       return makeActivity("Cleared terminal", undefined, event.client_at);
+    case "challenge_switch":
+      return makeActivity("Switched challenge", stringifyPayload(event.payload), event.client_at, "accent");
+    case "challenge_response":
+      return makeActivity("Updated challenge response", stringifyPayload(event.payload), event.client_at);
     case "buddy_hint":
       if (event.payload?.action === "dismissed") {
         return makeActivity("Dismissed buddy suggestion", detail, event.client_at, "warning");
@@ -132,10 +147,12 @@ function stringifyPayload(payload?: Record<string, unknown>) {
 export function Workspace({
   sessionId,
   assessmentId,
-  ticket,
+  challenges,
   initialFiles,
   entryPoint,
   durationMinutes,
+  initialChallengeId,
+  initialResponses,
 }: WorkspaceProps) {
   const router = useRouter();
   const initialOpenFile = entryPoint || initialFiles[0]?.path || "";
@@ -152,6 +169,11 @@ export function Workspace({
     initialOpenFile ? [initialOpenFile] : []
   );
   const [activePanel, setActivePanel] = useState<PanelMode>("explorer");
+  const [viewMode, setViewMode] = useState<ViewMode>("overview");
+  const [activeChallengeId, setActiveChallengeId] = useState<string | null>(
+    initialChallengeId || challenges[0]?.id || null
+  );
+  const [responses, setResponses] = useState<Record<string, ChallengeResponse>>(initialResponses);
   const [submitting, setSubmitting] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [runOpen, setRunOpen] = useState(false);
@@ -173,6 +195,7 @@ export function Workspace({
   });
 
   const saveDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const responseDebounce = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const lastEditLen = useRef<Record<string, number>>({});
   const lastCursorLogAt = useRef(0);
   const lastSelectionKey = useRef("");
@@ -211,7 +234,15 @@ export function Workspace({
     return { results, totalMatches };
   }, [deferredSearchQuery, filesContent]);
 
-  const fileCanRun = openFile && canRun(openFile);
+  const activeChallenge = challenges.find((challenge) => challenge.id === activeChallengeId) || challenges[0] || null;
+  const fileCanRun = !!(activeChallenge?.kind === "coding" && openFile && canRun(openFile));
+  const allChallengesComplete = challenges.every(
+    (challenge) => responses[challenge.id]?.status === "completed"
+  );
+  const completedCount = challenges.filter(
+    (challenge) => responses[challenge.id]?.status === "completed"
+  ).length;
+  const buddyDisabled = activeChallenge ? !activeChallenge.allow_buddy : false;
   const mm = Math.floor(elapsed / 60).toString().padStart(2, "0");
   const ss = (elapsed % 60).toString().padStart(2, "0");
   const remaining = Math.max(durationMinutes * 60 - elapsed, 0);
@@ -239,7 +270,6 @@ export function Workspace({
 
   useEffect(() => {
     monitor.start(sessionId);
-    monitor.event("file_open", initialOpenFile, { assessment_id: assessmentId });
     const unsubscribe = monitor.subscribe((event) => {
       pushActivity(summarizeEvent(event));
     });
@@ -306,6 +336,188 @@ export function Workspace({
     setActivePanel(panel);
     monitor.event(panel === "search" ? "search_open" : "panel_switch", openFile, {
       panel,
+    });
+  }
+
+  async function persistChallengeResponse(
+    challengeId: string,
+    body: {
+      status?: "pending" | "in_progress" | "completed";
+      answer_text?: string;
+      selected_option_ids?: Record<string, string[]>;
+    }
+  ) {
+    try {
+      const next = await api.saveChallengeResponse(sessionId, challengeId, body);
+      setResponses(next.challenge_responses);
+    } catch {
+      // Best effort. Keep the local optimistic state.
+    }
+  }
+
+  async function selectChallenge(challengeId: string) {
+    const challenge = challenges.find((item) => item.id === challengeId);
+    const changed = challengeId !== activeChallengeId;
+    if (changed) {
+      setActiveChallengeId(challengeId);
+      pushActivity(
+        makeActivity(
+          "Switched challenge",
+          challenge?.title,
+          new Date().toISOString(),
+          "accent"
+        )
+      );
+      monitor.event("challenge_switch", openFile, {
+        challenge_id: challengeId,
+        challenge_kind: challenge?.kind,
+      });
+    }
+    try {
+      await api.setCurrentChallenge(sessionId, challengeId);
+    } catch {
+      // Keep local navigation responsive.
+    }
+  }
+
+  async function openChallengeWorkspace(challengeId: string) {
+    const challenge = challenges.find((item) => item.id === challengeId);
+    if (!challenge) return;
+
+    await selectChallenge(challengeId);
+    setViewMode("workspace");
+
+    if (challenge.kind === "coding") {
+      const preferredPath =
+        challenge.related_files.find((path) => path in filesContent) ||
+        openFile ||
+        initialFiles[0]?.path ||
+        "";
+      if (preferredPath) {
+        if (preferredPath === openFile && openTabs.includes(preferredPath)) {
+          monitor.event("file_open", preferredPath, {
+            assessment_id: assessmentId,
+            source: "challenge_workspace",
+            challenge_id: challengeId,
+          });
+        } else {
+          switchFile(preferredPath, { source: "challenge_workspace" });
+        }
+      }
+    }
+  }
+
+  function openOverview() {
+    setViewMode("overview");
+  }
+
+  function updateChallengeStatus(
+    challengeId: string,
+    status: "pending" | "in_progress" | "completed"
+  ) {
+    setResponses((prev) => ({
+      ...prev,
+      [challengeId]: {
+        ...(prev[challengeId] || {
+          challenge_id: challengeId,
+          challenge_kind: challenges.find((challenge) => challenge.id === challengeId)?.kind || "coding",
+          answer_text: "",
+          selected_option_ids: {},
+          updated_at: new Date().toISOString(),
+        }),
+        status,
+        updated_at: new Date().toISOString(),
+      },
+    }));
+    pushActivity(makeActivity("Updated challenge status", `${challengeId} → ${status}`, new Date().toISOString()));
+    monitor.event("challenge_response", openFile, {
+      challenge_id: challengeId,
+      status,
+      source: "status_toggle",
+    });
+    void persistChallengeResponse(challengeId, { status });
+  }
+
+  function updateChallengeAnswerText(challengeId: string, value: string) {
+    setResponses((prev) => ({
+      ...prev,
+      [challengeId]: {
+        ...(prev[challengeId] || {
+          challenge_id: challengeId,
+          challenge_kind: challenges.find((challenge) => challenge.id === challengeId)?.kind || "theory",
+          status: "in_progress",
+          selected_option_ids: {},
+          updated_at: new Date().toISOString(),
+          answer_text: "",
+        }),
+        answer_text: value,
+        status: value.trim() ? "in_progress" : prev[challengeId]?.status || "pending",
+        updated_at: new Date().toISOString(),
+      },
+    }));
+    const existing = responseDebounce.current[challengeId];
+    if (existing) clearTimeout(existing);
+    responseDebounce.current[challengeId] = setTimeout(() => {
+      monitor.event("challenge_response", openFile, {
+        challenge_id: challengeId,
+        status: value.trim() ? "in_progress" : "pending",
+        answer_length: value.trim().length,
+        source: "text_response",
+      });
+      void persistChallengeResponse(challengeId, {
+        answer_text: value,
+        status: value.trim() ? "in_progress" : "pending",
+      });
+    }, 500);
+  }
+
+  function toggleObjectiveOption(
+    challengeId: string,
+    question: ObjectiveQuestion,
+    optionId: string
+  ) {
+    const current = responses[challengeId]?.selected_option_ids || {};
+    const selected = new Set(current[question.id] || []);
+    if (question.multi_select) {
+      if (selected.has(optionId)) selected.delete(optionId);
+      else selected.add(optionId);
+    } else {
+      selected.clear();
+      selected.add(optionId);
+    }
+    const nextSelected = {
+      ...current,
+      [question.id]: Array.from(selected),
+    };
+    const challenge = challenges.find((item) => item.id === challengeId);
+    const allAnswered = !!challenge?.objective_questions.every(
+      (item) => (nextSelected[item.id] || []).length > 0
+    );
+    const nextStatus = allAnswered ? "completed" : "in_progress";
+    setResponses((prev) => ({
+      ...prev,
+      [challengeId]: {
+        ...(prev[challengeId] || {
+          challenge_id: challengeId,
+          challenge_kind: "objective",
+          status: "in_progress",
+          answer_text: "",
+          updated_at: new Date().toISOString(),
+        }),
+        selected_option_ids: nextSelected,
+        status: nextStatus,
+        updated_at: new Date().toISOString(),
+      },
+    }));
+    monitor.event("challenge_response", openFile, {
+      challenge_id: challengeId,
+      status: nextStatus,
+      answered_questions: Object.values(nextSelected).filter((value) => value.length > 0).length,
+      source: "objective_response",
+    });
+    void persistChallengeResponse(challengeId, {
+      selected_option_ids: nextSelected,
+      status: nextStatus,
     });
   }
 
@@ -459,6 +671,10 @@ export function Workspace({
   }
 
   async function submit() {
+    if (!allChallengesComplete) {
+      alert("Please complete every challenge before submitting the assessment.");
+      return;
+    }
     setSubmitting(true);
     monitor.event("submit", openFile, { assessment_id: assessmentId });
     monitor.stop();
@@ -479,8 +695,9 @@ export function Workspace({
           <Logo />
           <div className="hidden md:flex items-center gap-2">
             <Badge tone="accent">
-              <FileCode2 className="h-3 w-3" /> Candidate Workspace
+              <FileCode2 className="h-3 w-3" /> {viewMode === "overview" ? "Assessment Overview" : "Candidate Workspace"}
             </Badge>
+            <Badge>{completedCount}/{Math.max(challenges.length, 1)} done</Badge>
             <span className="text-[11px] text-bone/40 font-mono">
               {sessionId.slice(-8)}
             </span>
@@ -495,7 +712,13 @@ export function Workspace({
               {remMM}:{remSS} left
             </span>
           </div>
-          <Button
+          {viewMode === "workspace" && (
+            <Button onClick={openOverview} size="sm" variant="outline">
+              <ArrowLeft className="h-4 w-4" /> All challenges
+            </Button>
+          )}
+          {viewMode === "workspace" && (
+            <Button
             onClick={runFile}
             disabled={!fileCanRun || runBusy}
             size="sm"
@@ -512,7 +735,17 @@ export function Workspace({
               </>
             )}
           </Button>
-          <Button onClick={submit} disabled={submitting} size="sm">
+          )}
+          <Button
+            onClick={submit}
+            disabled={submitting || !allChallengesComplete}
+            size="sm"
+            title={
+              allChallengesComplete
+                ? "Submit the full assessment"
+                : "Complete every challenge before submitting"
+            }
+          >
             {submitting ? (
               <>
                 <Loader2 className="h-4 w-4 animate-spin" /> Submitting...
@@ -526,158 +759,327 @@ export function Workspace({
         </div>
       </div>
 
-      <motion.div
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        transition={{ duration: 0.35 }}
-        className="flex-1 min-h-0 grid grid-cols-[52px_280px_minmax(0,1fr)_340px] overflow-hidden"
-      >
-        <aside className="border-r border-black/[0.06] bg-[#f3efe6] flex flex-col items-center py-3 gap-2">
-          <SidebarButton
-            active={activePanel === "explorer"}
-            title="Explorer"
-            onClick={() => switchPanel("explorer")}
-            icon={<FolderTree className="h-4 w-4" />}
+      {viewMode === "overview" ? (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ duration: 0.35 }}
+          className="flex-1 min-h-0 overflow-hidden"
+        >
+          <ChallengeOverview
+            challenges={challenges}
+            activeChallengeId={activeChallengeId}
+            responses={responses}
+            onOpenChallenge={openChallengeWorkspace}
           />
-          <SidebarButton
-            active={activePanel === "search"}
-            title="Search"
-            onClick={() => switchPanel("search")}
-            icon={<Search className="h-4 w-4" />}
-          />
-          <SidebarButton
-            active={activePanel === "ticket"}
-            title="Ticket"
-            onClick={() => switchPanel("ticket")}
-            icon={<Ticket className="h-4 w-4" />}
-          />
-        </aside>
-
-        <aside className="border-r border-black/[0.06] bg-ink-50/85 min-h-0 overflow-hidden">
-          {activePanel === "explorer" && (
-            <FileTree
-              files={Object.keys(filesContent)}
-              current={openFile}
-              onSelect={(path) => switchFile(path, { source: "explorer" })}
+        </motion.div>
+      ) : (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ duration: 0.35 }}
+          className="flex-1 min-h-0 grid grid-cols-[52px_280px_minmax(0,1fr)_340px] overflow-hidden"
+        >
+          <aside className="border-r border-black/[0.06] bg-[#f3efe6] flex flex-col items-center py-3 gap-2">
+            <SidebarButton
+              active={activePanel === "explorer"}
+              title="Explorer"
+              onClick={() => switchPanel("explorer")}
+              icon={<FolderTree className="h-4 w-4" />}
             />
-          )}
-          {activePanel === "search" && (
-            <SearchPanel
-              query={searchQuery}
-              results={searchState.results}
-              totalMatches={searchState.totalMatches}
-              onQueryChange={setSearchQuery}
-              onOpenResult={openSearchResult}
+            <SidebarButton
+              active={activePanel === "search"}
+              title="Search"
+              onClick={() => switchPanel("search")}
+              icon={<Search className="h-4 w-4" />}
             />
-          )}
-          {activePanel === "ticket" && <TicketPanel ticket={ticket} />}
-        </aside>
+            <SidebarButton
+              active={activePanel === "challenges"}
+              title="Challenges"
+              onClick={() => switchPanel("challenges")}
+              icon={<ListChecks className="h-4 w-4" />}
+            />
+          </aside>
 
-        <section className="min-w-0 min-h-0 grid grid-rows-[auto_1fr_auto_auto] overflow-hidden">
-          <div className="border-b border-black/[0.06] bg-ink-50/80 min-w-0">
-            <div className="px-2 py-1.5 flex items-center gap-1 overflow-x-auto scrollbar-thin">
-              {openTabs.map((path) => {
-                const active = path === openFile;
-                return (
-                  <div
-                    key={path}
-                    className={cn(
-                      "shrink-0 flex items-center gap-1 rounded-md border px-2 py-1.5 text-xs font-mono transition",
-                      active
-                        ? "bg-white text-bone border-black/[0.08]"
-                        : "text-bone/45 border-transparent hover:text-bone/80 hover:bg-black/[0.03]"
-                    )}
-                  >
-                    <button onClick={() => switchFile(path, { source: "tab" })}>
-                      {path}
-                    </button>
-                    {openTabs.length > 1 && (
-                      <button
-                        onClick={() => closeTab(path)}
-                        className="text-bone/35 hover:text-bone"
-                        aria-label={`Close ${path}`}
-                      >
-                        <X className="h-3.5 w-3.5" />
+          <aside className="border-r border-black/[0.06] bg-ink-50/85 min-h-0 overflow-hidden">
+            {activePanel === "explorer" && (
+              <FileTree
+                files={Object.keys(filesContent)}
+                current={openFile}
+                onSelect={(path) => switchFile(path, { source: "explorer" })}
+              />
+            )}
+            {activePanel === "search" && (
+              <SearchPanel
+                query={searchQuery}
+                results={searchState.results}
+                totalMatches={searchState.totalMatches}
+                onQueryChange={setSearchQuery}
+                onOpenResult={openSearchResult}
+              />
+            )}
+            {activePanel === "challenges" && (
+              <ChallengePanel
+                challenges={challenges}
+                activeChallengeId={activeChallengeId}
+                responses={responses}
+                onSelectChallenge={selectChallenge}
+                onChangeStatus={updateChallengeStatus}
+                onChangeAnswerText={updateChallengeAnswerText}
+                onToggleObjectiveOption={toggleObjectiveOption}
+              />
+            )}
+          </aside>
+
+          <section className="min-w-0 min-h-0 grid grid-rows-[auto_1fr_auto_auto] overflow-hidden">
+            <div className="border-b border-black/[0.06] bg-ink-50/80 min-w-0">
+              <div className="px-2 py-1.5 flex items-center gap-1 overflow-x-auto scrollbar-thin">
+                {openTabs.map((path) => {
+                  const active = path === openFile;
+                  return (
+                    <div
+                      key={path}
+                      className={cn(
+                        "shrink-0 flex items-center gap-1 rounded-md border px-2 py-1.5 text-xs font-mono transition",
+                        active
+                          ? "bg-white text-bone border-black/[0.08]"
+                          : "text-bone/45 border-transparent hover:text-bone/80 hover:bg-black/[0.03]"
+                      )}
+                    >
+                      <button onClick={() => switchFile(path, { source: "tab" })}>
+                        {path}
                       </button>
-                    )}
+                      {openTabs.length > 1 && (
+                        <button
+                          onClick={() => closeTab(path)}
+                          className="text-bone/35 hover:text-bone"
+                          aria-label={`Close ${path}`}
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="min-h-0 min-w-0 overflow-hidden bg-white">
+              {activeChallenge?.kind === "coding" && openFile && (
+                <CodeEditor
+                  path={openFile}
+                  language={langByPath[openFile] || "plaintext"}
+                  value={filesContent[openFile] || ""}
+                  revealLine={revealLine}
+                  onChange={(v) => editFile(openFile, v)}
+                  onFocus={() => monitor.event("editor_focus", openFile)}
+                  onBlur={() => monitor.event("editor_blur", openFile)}
+                  onCursorMove={handleCursorMove}
+                  onSelectionChange={handleSelectionChange}
+                />
+              )}
+              {activeChallenge?.kind !== "coding" && (
+                <ChallengeWorkArea
+                  challenge={activeChallenge}
+                  response={activeChallenge ? responses[activeChallenge.id] : undefined}
+                  onChangeAnswerText={updateChallengeAnswerText}
+                  onToggleObjectiveOption={toggleObjectiveOption}
+                />
+              )}
+            </div>
+
+            <div className="h-8 border-t border-black/[0.06] bg-[#f6f3ea] px-3 flex items-center justify-between text-[11px] font-mono text-bone/50">
+              <div className="flex items-center gap-3 overflow-hidden">
+                <span className="truncate">{openFile || "No file open"}</span>
+                <span>{langByPath[openFile] || "plaintext"}</span>
+                {searchState.totalMatches > 0 && deferredSearchQuery.trim() && (
+                  <span>
+                    {searchState.totalMatches} hits for "{deferredSearchQuery.trim()}"
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-3">
+                <span>
+                  Ln {cursor.line}, Col {cursor.column}
+                </span>
+                <span>
+                  Sel {cursor.selectedChars} chars
+                </span>
+                <button
+                  onClick={() => openTerminal("activity")}
+                  className="text-accent hover:text-accent-deep"
+                >
+                  Activity {activityFeed.length}
+                </button>
+                {activeChallenge && (
+                  <span className="truncate max-w-[180px]">
+                    {activeChallenge.kind}: {activeChallenge.title}
+                  </span>
+                )}
+              </div>
+            </div>
+
+            <RunPanel
+              open={runOpen}
+              busy={runBusy}
+              activeTab={panelTab}
+              terminalInput={terminalInput}
+              history={terminalHistory}
+              activity={activityFeed}
+              onTerminalInputChange={setTerminalInput}
+              onExecuteCommand={executeTerminalCommand}
+              onRunCurrentFile={runFile}
+              onClearTerminal={clearTerminalHistory}
+              onToggleTab={setPanelTab}
+              onToggle={() => {
+                if (!runOpen) openTerminal(panelTab);
+                else setRunOpen(false);
+              }}
+              onClose={() => setRunOpen(false)}
+            />
+          </section>
+
+          <aside className="min-w-0 border-l border-black/[0.06] bg-ink-50/80 min-h-0 overflow-hidden">
+            <BuddyChat
+              sessionId={sessionId}
+              challengeId={activeChallenge?.id}
+              disabled={buddyDisabled}
+              disabledReason="Buddy is disabled for theory and objective challenges."
+              openFile={openFile}
+              workspace={filesContent}
+              onApplyEdit={applyBuddyEdit}
+              onDismissEdit={dismissBuddyEdit}
+            />
+          </aside>
+        </motion.div>
+      )}
+    </div>
+  );
+}
+
+function ChallengeWorkArea({
+  challenge,
+  response,
+  onChangeAnswerText,
+  onToggleObjectiveOption,
+}: {
+  challenge: CandidateChallenge | null;
+  response?: ChallengeResponse;
+  onChangeAnswerText: (challengeId: string, value: string) => void;
+  onToggleObjectiveOption: (
+    challengeId: string,
+    question: ObjectiveQuestion,
+    optionId: string
+  ) => void;
+}) {
+  if (!challenge) {
+    return <div className="h-full grid place-items-center text-bone/40">No active challenge.</div>;
+  }
+
+  return (
+    <div className="h-full overflow-y-auto scrollbar-thin bg-[#fffdfa]">
+      <div className="max-w-4xl mx-auto p-6 space-y-5">
+        <div className="flex items-center gap-2 flex-wrap">
+          <Badge tone={challenge.kind === "sql" ? "amber" : challenge.kind === "theory" ? "violet" : "default"}>
+            {challenge.kind}
+          </Badge>
+          <Badge>{challenge.estimated_minutes} min</Badge>
+        </div>
+
+        <div>
+          <h2 className="font-display text-3xl font-semibold">{challenge.title}</h2>
+          <p className="mt-2 text-sm text-bone/70 leading-relaxed whitespace-pre-line">
+            {challenge.description}
+          </p>
+        </div>
+
+        {challenge.issues.length > 0 && (
+          <div className="rounded-2xl border border-black/[0.06] bg-white p-4">
+            <div className="text-xs uppercase tracking-[0.22em] text-bone/40 mb-3">
+              Issues in this challenge
+            </div>
+            <div className="space-y-3">
+              {challenge.issues.map((issue, idx) => (
+                <div key={issue.id} className="rounded-xl bg-[#fbfaf6] border border-black/[0.05] p-3">
+                  <div className="text-sm font-medium text-bone">
+                    {idx + 1}. {issue.title}
                   </div>
-                );
-              })}
+                  <div className="mt-1 text-sm text-bone/65">{issue.description}</div>
+                </div>
+              ))}
             </div>
           </div>
+        )}
 
-          <div className="min-h-0 min-w-0 overflow-hidden bg-white">
-            {openFile && (
-              <CodeEditor
-                path={openFile}
-                language={langByPath[openFile] || "plaintext"}
-                value={filesContent[openFile] || ""}
-                revealLine={revealLine}
-                onChange={(v) => editFile(openFile, v)}
-                onFocus={() => monitor.event("editor_focus", openFile)}
-                onBlur={() => monitor.event("editor_blur", openFile)}
-                onCursorMove={handleCursorMove}
-                onSelectionChange={handleSelectionChange}
+        {challenge.instructions && (
+          <div className="rounded-2xl border border-black/[0.06] bg-white p-4">
+            <div className="text-xs uppercase tracking-[0.22em] text-bone/40 mb-2">
+              Instructions
+            </div>
+            <p className="text-sm text-bone/75 whitespace-pre-line leading-relaxed">
+              {challenge.instructions}
+            </p>
+          </div>
+        )}
+
+        {(challenge.kind === "theory" || challenge.kind === "sql") && (
+          <div className="rounded-2xl border border-black/[0.06] bg-white p-4 space-y-3">
+            <div className="text-xs uppercase tracking-[0.22em] text-bone/40">
+              Your response
+            </div>
+            {challenge.kind === "sql" ? (
+              <div className="h-[360px] border border-black/[0.06] rounded-xl overflow-hidden">
+                <CodeEditor
+                  path={`${challenge.id}.sql`}
+                  language={challenge.editor_language || "sql"}
+                  value={response?.answer_text || challenge.starter_content || ""}
+                  onChange={(value) => onChangeAnswerText(challenge.id, value)}
+                />
+              </div>
+            ) : (
+              <textarea
+                value={response?.answer_text || ""}
+                onChange={(e) => onChangeAnswerText(challenge.id, e.target.value)}
+                rows={12}
+                className="w-full rounded-xl border border-black/[0.08] bg-[#fcfbf7] px-3 py-3 text-sm outline-none focus:border-accent/50"
+                placeholder={challenge.expected_response_format || "Write your answer here..."}
               />
             )}
           </div>
+        )}
 
-          <div className="h-8 border-t border-black/[0.06] bg-[#f6f3ea] px-3 flex items-center justify-between text-[11px] font-mono text-bone/50">
-            <div className="flex items-center gap-3 overflow-hidden">
-              <span className="truncate">{openFile || "No file open"}</span>
-              <span>{langByPath[openFile] || "plaintext"}</span>
-              {searchState.totalMatches > 0 && deferredSearchQuery.trim() && (
-                <span>
-                  {searchState.totalMatches} hits for "{deferredSearchQuery.trim()}"
-                </span>
-              )}
-            </div>
-            <div className="flex items-center gap-3">
-              <span>
-                Ln {cursor.line}, Col {cursor.column}
-              </span>
-              <span>
-                Sel {cursor.selectedChars} chars
-              </span>
-              <button
-                onClick={() => openTerminal("activity")}
-                className="text-accent hover:text-accent-deep"
-              >
-                Activity {activityFeed.length}
-              </button>
-            </div>
+        {challenge.kind === "objective" && (
+          <div className="space-y-4">
+            {challenge.objective_questions.map((question) => (
+              <div key={question.id} className="rounded-2xl border border-black/[0.06] bg-white p-4">
+                <div className="text-sm font-medium text-bone">{question.prompt}</div>
+                <div className="mt-3 space-y-2">
+                  {question.options.map((option) => {
+                    const selected = !!response?.selected_option_ids?.[question.id]?.includes(option.id);
+                    return (
+                      <button
+                        key={option.id}
+                        onClick={() => onToggleObjectiveOption(challenge.id, question, option.id)}
+                        className={cn(
+                          "w-full text-left rounded-xl border px-3 py-2 text-sm transition",
+                          selected
+                            ? "border-accent/40 bg-accent-soft/70 text-bone"
+                            : "border-black/[0.06] bg-[#fcfbf7] hover:border-black/15 text-bone/75"
+                        )}
+                      >
+                        <span className="font-mono text-[11px] text-bone/45 mr-2">
+                          {option.id.toUpperCase()}.
+                        </span>
+                        {option.text}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
           </div>
-
-          <RunPanel
-            open={runOpen}
-            busy={runBusy}
-            activeTab={panelTab}
-            terminalInput={terminalInput}
-            history={terminalHistory}
-            activity={activityFeed}
-            onTerminalInputChange={setTerminalInput}
-            onExecuteCommand={executeTerminalCommand}
-            onRunCurrentFile={runFile}
-            onClearTerminal={clearTerminalHistory}
-            onToggleTab={setPanelTab}
-            onToggle={() => {
-              if (!runOpen) openTerminal(panelTab);
-              else setRunOpen(false);
-            }}
-            onClose={() => setRunOpen(false)}
-          />
-        </section>
-
-        <aside className="min-w-0 border-l border-black/[0.06] bg-ink-50/80 min-h-0 overflow-hidden">
-          <BuddyChat
-            sessionId={sessionId}
-            openFile={openFile}
-            workspace={filesContent}
-            onApplyEdit={applyBuddyEdit}
-            onDismissEdit={dismissBuddyEdit}
-          />
-        </aside>
-      </motion.div>
+        )}
+      </div>
     </div>
   );
 }

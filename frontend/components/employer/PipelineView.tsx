@@ -20,12 +20,13 @@ const STAGES: { key: PipelineStage; label: string; agent: string }[] = [
   { key: "extracting", label: "Reading PM tool / context", agent: "Extractor" },
   { key: "authoring", label: "Generating production codebase", agent: "Code Author" },
   { key: "ticketing", label: "Drafting candidate ticket", agent: "Ticket Author" },
+  { key: "challenging", label: "Designing challenge sequence", agent: "Challenge Architect" },
   { key: "injecting", label: "Planting realistic defects", agent: "Bug Injector" },
   { key: "ready", label: "Assessment ready", agent: "—" },
 ];
 
 const ORDER: PipelineStage[] = [
-  "pending", "fetching", "extracting", "authoring", "ticketing", "injecting", "ready",
+  "pending", "fetching", "extracting", "authoring", "ticketing", "challenging", "injecting", "ready",
 ];
 
 function stageIndex(s: PipelineStage) {
@@ -151,6 +152,52 @@ export function PipelineView({ initial }: { initial: Assessment }) {
         </motion.div>
       )}
 
+      {ready && a.candidate_challenges?.length > 0 && (
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+        >
+          <Card>
+            <CardBody>
+              <div className="text-xs uppercase tracking-[0.22em] text-bone/40 mb-3">
+                Challenge sequence
+              </div>
+              <div className="space-y-3">
+                {a.candidate_challenges.map((challenge, idx) => (
+                  <div
+                    key={challenge.id}
+                    className="rounded-xl border border-black/[0.06] bg-black/[0.02] px-4 py-3"
+                  >
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <Badge>{idx + 1}</Badge>
+                      <Badge tone={challenge.kind === "coding" ? "accent" : challenge.kind === "theory" ? "violet" : challenge.kind === "sql" ? "amber" : "default"}>
+                        {challenge.kind}
+                      </Badge>
+                      <span className="text-xs text-bone/45">
+                        {challenge.estimated_minutes} min
+                      </span>
+                    </div>
+                    <div className="mt-2 font-medium text-bone">{challenge.title}</div>
+                    <p className="mt-1 text-sm text-bone/65 leading-relaxed whitespace-pre-line">
+                      {challenge.description || challenge.instructions}
+                    </p>
+                    {challenge.issues?.length > 0 && (
+                      <ul className="mt-2 space-y-1">
+                        {challenge.issues.map((issue) => (
+                          <li key={issue.id} className="text-xs text-bone/55">
+                            • {issue.title}: {issue.description}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </CardBody>
+          </Card>
+        </motion.div>
+      )}
+
       {ready && a.candidate_ticket && (
         <motion.div
           initial={{ opacity: 0, y: 10 }}
@@ -159,7 +206,7 @@ export function PipelineView({ initial }: { initial: Assessment }) {
           <Card>
             <CardBody>
               <div className="text-xs uppercase tracking-[0.22em] text-bone/40 mb-3">
-                Candidate ticket
+                Primary coding ticket
               </div>
               <div className="flex items-center gap-2 mb-2 flex-wrap">
                 <Badge tone="coral">{a.candidate_ticket.priority}</Badge>

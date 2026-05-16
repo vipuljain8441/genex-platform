@@ -31,12 +31,18 @@ const HINT_TONE: Record<string, string> = {
 
 export function BuddyChat({
   sessionId,
+  challengeId,
+  disabled,
+  disabledReason,
   openFile,
   workspace,
   onApplyEdit,
   onDismissEdit,
 }: {
   sessionId: string;
+  challengeId?: string | null;
+  disabled?: boolean;
+  disabledReason?: string;
   openFile: string | null;
   workspace: Record<string, string>;
   onApplyEdit?: (filePath: string, newContent: string, rationale: string) => void;
@@ -64,7 +70,7 @@ export function BuddyChat({
 
   async function send() {
     const text = q.trim();
-    if (!text || busy) return;
+    if (!text || busy || disabled) return;
     setMsgs((m) => [...m, { role: "user", content: text }]);
     setQ("");
     setBusy(true);
@@ -72,6 +78,7 @@ export function BuddyChat({
       const r = await api.askBuddy({
         session_id: sessionId,
         question: text,
+        challenge_id: challengeId,
         open_file: openFile,
         workspace,
       });
@@ -143,7 +150,9 @@ export function BuddyChat({
       <div ref={scroll} className="flex-1 overflow-y-auto scrollbar-thin p-4 space-y-3">
         {msgs.length === 0 && (
           <div className="text-sm text-bone/45 text-center py-10">
-            Ask Buddy for a fix or an explanation — proposed edits show up with Apply / Dismiss.
+            {disabled
+              ? (disabledReason || "Buddy is disabled for this challenge.")
+              : "Ask Buddy for a fix or an explanation — proposed edits show up with Apply / Dismiss."}
           </div>
         )}
         <AnimatePresence initial={false}>
@@ -204,12 +213,13 @@ export function BuddyChat({
             value={q}
             onChange={(e) => setQ(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && send()}
-            placeholder="Ask buddy a question or for a fix…"
-            className="flex-1 bg-ink-100 text-bone placeholder:text-bone/35 border border-black/[0.06] rounded-xl px-3 py-2 text-sm outline-none focus:bg-white focus:border-accent/50"
+            placeholder={disabled ? "Buddy is disabled for this challenge" : "Ask buddy a question or for a fix…"}
+            disabled={disabled}
+            className="flex-1 bg-ink-100 text-bone placeholder:text-bone/35 border border-black/[0.06] rounded-xl px-3 py-2 text-sm outline-none focus:bg-white focus:border-accent/50 disabled:opacity-50"
           />
           <button
             onClick={send}
-            disabled={busy}
+            disabled={busy || disabled}
             className="px-3 py-2 rounded-xl bg-accent text-white disabled:opacity-40 hover:bg-accent-deep transition"
           >
             <Send className="h-4 w-4" />

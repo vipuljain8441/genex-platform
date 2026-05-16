@@ -25,6 +25,12 @@ const ROLE_FAMILIES: RoleFamily[] = [
 ];
 const SENIORITIES: JobSpec["seniority"][] = ["junior", "mid", "senior", "staff"];
 const TOOLS: JobSpec["pm_tool"][] = ["jira", "linear", "github", "none"];
+const CHALLENGE_TYPES: NonNullable<JobSpec["challenge_types"]> = [
+  "coding",
+  "sql",
+  "theory",
+  "objective",
+];
 
 const INDUSTRY_OPTIONS = [
   "Fintech", "E-commerce", "Healthtech", "SaaS / B2B", "EdTech",
@@ -70,6 +76,8 @@ export function JobForm() {
     duration_minutes: 60,
     pm_tool: "none",
     codebase_source: "generated",
+    challenge_count: 4,
+    challenge_types: ["coding", "sql", "theory", "objective"],
   });
   const [rc, setRc] = useState<RcDraft>(DEFAULT_RC);
 
@@ -93,6 +101,19 @@ export function JobForm() {
 
   const set = <K extends keyof JobSpec>(k: K, v: JobSpec[K]) =>
     setForm((f) => ({ ...f, [k]: v }));
+
+  function toggleChallengeType(kind: "coding" | "sql" | "theory" | "objective") {
+    setForm((prev) => {
+      const current = prev.challenge_types || [];
+      const next = current.includes(kind)
+        ? current.filter((item) => item !== kind)
+        : [...current, kind];
+      return {
+        ...prev,
+        challenge_types: next.length ? next : ["coding"],
+      };
+    });
+  }
 
   const needsRecruiterContext = form.pm_tool === "none" && codebaseSource === "generated";
   const usesJiraAnalysis = form.pm_tool === "jira" && codebaseSource === "generated";
@@ -395,6 +416,38 @@ export function JobForm() {
                     )}
                   >
                     {t === "none" ? "No PM tool" : t}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div className="grid md:grid-cols-2 gap-4">
+            <div>
+              <Label hint="Total challenge steps in the assessment">Challenge count</Label>
+              <TextInput
+                type="number"
+                min={2}
+                max={8}
+                value={form.challenge_count || 4}
+                onChange={(e) => set("challenge_count", parseInt(e.target.value || "4", 10))}
+              />
+            </div>
+            <div>
+              <Label hint="Mix coding with judgment/written tasks">Challenge types</Label>
+              <div className="flex flex-wrap gap-2">
+                {CHALLENGE_TYPES.map((kind) => (
+                  <button
+                    key={kind}
+                    onClick={() => toggleChallengeType(kind)}
+                    className={cn(
+                      "rounded-lg border px-3 py-1.5 text-sm capitalize transition",
+                      (form.challenge_types || []).includes(kind)
+                        ? "border-accent/60 bg-accent/15 text-accent"
+                        : "border-black/[0.08] bg-white text-bone/65 hover:border-black/20"
+                    )}
+                  >
+                    {kind}
                   </button>
                 ))}
               </div>

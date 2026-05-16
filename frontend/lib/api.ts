@@ -35,6 +35,7 @@ export type ActivityEventInput = {
 export type RoleFamily =
   | "backend" | "frontend" | "fullstack"
   | "qa" | "devops" | "data" | "pm" | "design";
+export type ChallengeKind = "coding" | "sql" | "objective" | "theory";
 
 export type RecruiterContext = {
   domain_summary: string;
@@ -64,6 +65,69 @@ export type JobSpec = {
   recruiter_context?: RecruiterContext | null;
   codebase_source?: "generated" | "github";
   github_source?: GitHubSource | null;
+  challenge_count?: number;
+  challenge_types?: ChallengeKind[];
+};
+
+export type ObjectiveOption = {
+  id: string;
+  text: string;
+};
+
+export type ObjectiveQuestion = {
+  id: string;
+  prompt: string;
+  options: ObjectiveOption[];
+  multi_select: boolean;
+  correct_option_ids: string[];
+  explanation: string;
+};
+
+export type CandidateChallenge = {
+  id: string;
+  kind: ChallengeKind;
+  title: string;
+  description: string;
+  instructions: string;
+  acceptance_criteria: string[];
+  issues: {
+    id: string;
+    title: string;
+    description: string;
+    severity: "low" | "medium" | "high";
+  }[];
+  priority: "low" | "medium" | "high" | "critical";
+  labels: string[];
+  reporter: string;
+  assignee: string;
+  estimated_minutes: number;
+  related_files: string[];
+  workspace_enabled: boolean;
+  allow_buddy: boolean;
+  objective_questions: ObjectiveQuestion[];
+  expected_response_format: string;
+  editor_language: string;
+  starter_content: string;
+};
+
+export type ChallengeResponse = {
+  challenge_id: string;
+  challenge_kind: ChallengeKind;
+  status: "pending" | "in_progress" | "completed";
+  answer_text: string;
+  selected_option_ids: Record<string, string[]>;
+  updated_at: string;
+};
+
+export type CandidateSessionView = {
+  id: string;
+  assessment_id: string;
+  candidate_name: string;
+  started_at: string;
+  submitted_at: string | null;
+  current_challenge_id: string | null;
+  current_files: Record<string, string>;
+  challenge_responses: Record<string, ChallengeResponse>;
 };
 
 export type GitHubIssue = {
@@ -112,6 +176,7 @@ export type JiraAnalysis = {
 
 export type PipelineStage =
   | "pending" | "fetching" | "extracting" | "authoring"
+  | "challenging"
   | "ticketing" | "injecting" | "ready" | "failed";
 
 export type Assessment = {
@@ -136,6 +201,7 @@ export type Assessment = {
     reporter: string;
     assignee: string;
   } | null;
+  candidate_challenges: CandidateChallenge[];
   bug_brief: any;
   created_at: string;
 };
@@ -152,15 +218,33 @@ export const api = {
     http<Assessment[]>("/api/employer/assessments"),
 
   startSession: (assessment_id: string, candidate_name: string) =>
-    http<{ session: any; assessment: Assessment }>(
+    http<{ session: CandidateSessionView; assessment: Assessment }>(
       "/api/candidate/sessions",
       { method: "POST", body: JSON.stringify({ assessment_id, candidate_name }) }
     ),
   getSession: (sid: string) =>
-    http<{ session: any; assessment: Assessment }>(`/api/candidate/sessions/${sid}`),
+    http<{ session: CandidateSessionView; assessment: Assessment }>(`/api/candidate/sessions/${sid}`),
   saveFile: (sid: string, path: string, content: string) =>
-    http<any>(`/api/candidate/sessions/${sid}/files`, {
+    http<CandidateSessionView>(`/api/candidate/sessions/${sid}/files`, {
       method: "PUT", body: JSON.stringify({ path, content }),
+    }),
+  setCurrentChallenge: (sid: string, challenge_id: string) =>
+    http<CandidateSessionView>(`/api/candidate/sessions/${sid}/current-challenge`, {
+      method: "PUT",
+      body: JSON.stringify({ challenge_id }),
+    }),
+  saveChallengeResponse: (
+    sid: string,
+    challenge_id: string,
+    body: {
+      status?: "pending" | "in_progress" | "completed";
+      answer_text?: string;
+      selected_option_ids?: Record<string, string[]>;
+    }
+  ) =>
+    http<CandidateSessionView>(`/api/candidate/sessions/${sid}/challenges/${challenge_id}/response`, {
+      method: "PUT",
+      body: JSON.stringify(body),
     }),
   submit: (sid: string) =>
     http<{ session_id: string; status: string }>(
@@ -181,6 +265,7 @@ export const api = {
   askBuddy: (body: {
     session_id: string;
     question: string;
+    challenge_id?: string | null;
     open_file?: string | null;
     selection?: string | null;
     workspace?: Record<string, string>;
