@@ -1,6 +1,12 @@
 "use client";
 
-import { api } from "./api";
+import { api, type ActivityEventInput } from "./api";
+
+export type MonitorEvent = ActivityEventInput & {
+  client_at: string;
+};
+
+type MonitorListener = (event: MonitorEvent) => void;
 
 /**
  * Batches activity events client-side and flushes them every 1.5s.
@@ -8,15 +14,11 @@ import { api } from "./api";
  * per file per flush window so we don't drown the server.
  */
 class Monitor {
-  private queue: {
-    session_id: string;
-    kind: string;
-    file_path?: string | null;
-    payload?: Record<string, unknown>;
-  }[] = [];
+  private queue: ActivityEventInput[] = [];
   private editAccum: Map<string, number> = new Map();
   private timer: ReturnType<typeof setInterval> | null = null;
   private currentSession: string | null = null;
+  private listeners: Set<MonitorListener> = new Set();
 
   start(session_id: string) {
     this.currentSession = session_id;
@@ -28,6 +30,7 @@ class Monitor {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
     this.flush();
+    this.currentSession = null;
   }
 
   edit(file_path: string, deltaChars: number) {
@@ -37,29 +40,53 @@ class Monitor {
 
   event(kind: string, file_path?: string | null, payload?: Record<string, unknown>) {
     if (!this.currentSession) return;
-    this.queue.push({
+    const event: MonitorEvent = {
       session_id: this.currentSession,
       kind,
       file_path: file_path ?? null,
       payload: payload ?? {},
+      client_at: new Date().toISOString(),
+    };
+    this.queue.push({
+      session_id: event.session_id,
+      kind: event.kind,
+      file_path: event.file_path,
+      payload: event.payload,
     });
+    this.emit(event);
+  }
+
+  subscribe(listener: MonitorListener) {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  private emit(event: MonitorEvent) {
+    for (const listener of this.listeners) listener(event);
   }
 
   private flush() {
     if (!this.currentSession) return;
     for (const [path, delta] of this.editAccum.entries()) {
-      this.queue.push({
+      const event: MonitorEvent = {
         session_id: this.currentSession,
         kind: "edit",
         file_path: path,
         payload: { delta_chars: delta },
+        client_at: new Date().toISOString(),
+      };
+      this.queue.push({
+        session_id: event.session_id,
+        kind: event.kind,
+        file_path: event.file_path,
+        payload: event.payload,
       });
+      this.emit(event);
     }
     this.editAccum.clear();
     const batch = this.queue.splice(0, this.queue.length);
-    for (const ev of batch) {
-      api.recordEvent(ev).catch(() => {/* swallow — best-effort */});
-    }
+    if (batch.length === 0) return;
+    api.recordEvents(batch).catch(() => {/* swallow — best-effort */});
   }
 }
 

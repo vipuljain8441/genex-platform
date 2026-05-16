@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import shlex
 import shutil
 import tempfile
 import time
@@ -137,41 +138,33 @@ class RunOut(BaseModel):
     unsupported: bool = False
 
 
-@router.post("/sessions/{session_id}/run", response_model=RunOut)
-async def run_file(session_id: str, body: RunIn) -> RunOut:
-    """Execute the candidate's current file content in a sandboxed temp dir.
+class TerminalIn(BaseModel):
+    command: str
 
-    Caveats:
-    - Local-process execution, no container — fine for hackathon, not for prod.
-    - 10s timeout, capped output, no network restrictions.
-    """
-    session = await store.get_session(session_id)
-    if not session:
-        raise HTTPException(404, "session not found")
-    if body.file_path not in session.current_files:
-        raise HTTPException(404, f"file not in session: {body.file_path}")
 
-    ext = "." + body.file_path.rsplit(".", 1)[-1].lower()
-    runner = LANG_RUNNERS.get(ext)
-    if not runner:
+async def _execute_workspace_command(
+    session: CandidateSession,
+    cmd: list[str],
+    unsupported_command: str,
+) -> RunOut:
+    if not cmd:
         return RunOut(
             stdout="",
-            stderr=f"Live execution for {ext!r} files isn't supported yet.",
+            stderr="No command provided.",
             exit_code=-1,
             duration_ms=0,
             command="",
             unsupported=True,
         )
-    if shutil.which(runner[0]) is None:
+    if shutil.which(cmd[0]) is None:
         return RunOut(
             stdout="",
-            stderr=f"Runtime '{runner[0]}' not found on PATH.",
+            stderr=f"Runtime '{cmd[0]}' not found on PATH.",
             exit_code=-1,
             duration_ms=0,
-            command=" ".join(runner),
+            command=unsupported_command,
             unsupported=True,
         )
-
     started = time.monotonic()
     with tempfile.TemporaryDirectory(prefix="genex_run_") as td:
         root = Path(td)
@@ -181,7 +174,6 @@ async def run_file(session_id: str, body: RunIn) -> RunOut:
             full.parent.mkdir(parents=True, exist_ok=True)
             full.write_text(content)
 
-        cmd = runner + [body.file_path]
         try:
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
@@ -215,6 +207,37 @@ async def run_file(session_id: str, body: RunIn) -> RunOut:
             command=" ".join(cmd),
             timed_out=timed_out,
         )
+    return result
+
+
+@router.post("/sessions/{session_id}/run", response_model=RunOut)
+async def run_file(session_id: str, body: RunIn) -> RunOut:
+    """Execute the candidate's current file content in a sandboxed temp dir.
+
+    Caveats:
+    - Local-process execution, no container — fine for hackathon, not for prod.
+    - 10s timeout, capped output, no network restrictions.
+    """
+    session = await store.get_session(session_id)
+    if not session:
+        raise HTTPException(404, "session not found")
+    if body.file_path not in session.current_files:
+        raise HTTPException(404, f"file not in session: {body.file_path}")
+
+    ext = "." + body.file_path.rsplit(".", 1)[-1].lower()
+    runner = LANG_RUNNERS.get(ext)
+    if not runner:
+        return RunOut(
+            stdout="",
+            stderr=f"Live execution for {ext!r} files isn't supported yet.",
+            exit_code=-1,
+            duration_ms=0,
+            command="",
+            unsupported=True,
+        )
+
+    cmd = runner + [body.file_path]
+    result = await _execute_workspace_command(session, cmd, " ".join(runner))
 
     # Activity event so the heatmap captures "ran code" intensity per file.
     await store.append_event(ActivityEvent(
@@ -222,6 +245,36 @@ async def run_file(session_id: str, body: RunIn) -> RunOut:
         kind=EventKind.RUN,
         file_path=body.file_path,
         payload={
+            "exit_code": result.exit_code,
+            "duration_ms": result.duration_ms,
+            "timed_out": result.timed_out,
+            "unsupported": result.unsupported,
+        },
+    ))
+    return result
+
+
+@router.post("/sessions/{session_id}/terminal", response_model=RunOut)
+async def run_terminal_command(session_id: str, body: TerminalIn) -> RunOut:
+    session = await store.get_session(session_id)
+    if not session:
+        raise HTTPException(404, "session not found")
+
+    command = body.command.strip()
+    if not command:
+        raise HTTPException(400, "command is required")
+
+    try:
+        cmd = shlex.split(command)
+    except ValueError as e:
+        raise HTTPException(400, f"invalid command: {e}") from e
+
+    result = await _execute_workspace_command(session, cmd, command)
+    await store.append_event(ActivityEvent(
+        session_id=session.id,
+        kind=EventKind.TERMINAL_COMMAND,
+        payload={
+            "command": command,
             "exit_code": result.exit_code,
             "duration_ms": result.duration_ms,
             "timed_out": result.timed_out,

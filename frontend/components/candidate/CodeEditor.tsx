@@ -1,6 +1,8 @@
 "use client";
 
 import dynamic from "next/dynamic";
+import { useEffect, useRef } from "react";
+import type { editor as MonacoEditorNS } from "monaco-editor";
 
 const Monaco = dynamic(() => import("@monaco-editor/react"), { ssr: false });
 
@@ -25,12 +27,32 @@ export function CodeEditor({
   language,
   value,
   onChange,
+  revealLine,
+  onFocus,
+  onBlur,
+  onCursorMove,
+  onSelectionChange,
 }: {
   path: string;
   language: string;
   value: string;
   onChange: (v: string) => void;
+  revealLine?: number | null;
+  onFocus?: () => void;
+  onBlur?: () => void;
+  onCursorMove?: (line: number, column: number) => void;
+  onSelectionChange?: (startLine: number, endLine: number, selectedText: string) => void;
 }) {
+  const editorRef = useRef<MonacoEditorNS.IStandaloneCodeEditor | null>(null);
+
+  useEffect(() => {
+    const editor = editorRef.current;
+    if (!editor || !revealLine) return;
+    editor.revealLineInCenter(revealLine);
+    editor.setPosition({ lineNumber: revealLine, column: 1 });
+    editor.focus();
+  }, [revealLine, path]);
+
   return (
     <Monaco
       height="100%"
@@ -38,11 +60,30 @@ export function CodeEditor({
       language={toMonaco(language, path)}
       value={value}
       onChange={(v) => onChange(v || "")}
+      onMount={(editor) => {
+        editorRef.current = editor;
+        editor.onDidFocusEditorText(() => onFocus?.());
+        editor.onDidBlurEditorText(() => onBlur?.());
+        editor.onDidChangeCursorPosition((event) => {
+          onCursorMove?.(event.position.lineNumber, event.position.column);
+        });
+        editor.onDidChangeCursorSelection((event) => {
+          const model = editor.getModel();
+          if (!model) return;
+          const selection = event.selection;
+          const text = model.getValueInRange(selection);
+          onSelectionChange?.(
+            selection.startLineNumber,
+            selection.endLineNumber,
+            text
+          );
+        });
+      }}
       options={{
         fontSize: 13,
         fontFamily: "JetBrains Mono, ui-monospace, monospace",
         fontLigatures: true,
-        minimap: { enabled: false },
+        minimap: { enabled: true, scale: 1, showSlider: "mouseover" },
         smoothScrolling: true,
         cursorBlinking: "smooth",
         cursorSmoothCaretAnimation: "on",
@@ -50,11 +91,22 @@ export function CodeEditor({
         padding: { top: 14, bottom: 14 },
         renderLineHighlight: "gutter",
         scrollbar: { verticalScrollbarSize: 8, horizontalScrollbarSize: 8 },
+        lineNumbers: "on",
+        rulers: [80, 120],
+        folding: true,
+        bracketPairColorization: { enabled: true },
+        guides: {
+          indentation: true,
+          bracketPairs: true,
+        },
+        stickyScroll: { enabled: true },
+        quickSuggestions: true,
+        suggestOnTriggerCharacters: true,
         // Keep autocomplete / hover popups inside the editor's column so they
         // never escape and cover the buddy chat on the right.
         fixedOverflowWidgets: true,
-        wordWrap: "on",
-        wrappingIndent: "indent",
+        wordWrap: "off",
+        wrappingIndent: "same",
         automaticLayout: true,
       }}
     />

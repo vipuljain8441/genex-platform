@@ -11,10 +11,16 @@ from app.models.schemas import ActivityEvent
 _WEIGHTS = {
     "edit": 3.0,
     "run": 4.0,
+    "terminal_command": 3.5,
     "buddy_query": 2.0,
     "buddy_hint": 1.0,
     "file_open": 1.0,
     "file_switch": 1.0,
+    "search_query": 1.5,
+    "search_result_open": 1.5,
+    "selection_change": 0.5,
+    "cursor_move": 0.25,
+    "panel_switch": 0.5,
     "idle": -0.5,
     "submit": 5.0,
 }

@@ -14,6 +14,23 @@ async function http<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json();
 }
 
+export type CommandResult = {
+  stdout: string;
+  stderr: string;
+  exit_code: number;
+  duration_ms: number;
+  command: string;
+  timed_out: boolean;
+  unsupported: boolean;
+};
+
+export type ActivityEventInput = {
+  session_id: string;
+  kind: string;
+  file_path?: string | null;
+  payload?: Record<string, unknown>;
+};
+
 // ── Employer ────────────────────────────────────────────────────────────────
 export type RoleFamily =
   | "backend" | "frontend" | "fullstack"
@@ -151,17 +168,14 @@ export const api = {
     ),
 
   run: (sid: string, file_path: string) =>
-    http<{
-      stdout: string;
-      stderr: string;
-      exit_code: number;
-      duration_ms: number;
-      command: string;
-      timed_out: boolean;
-      unsupported: boolean;
-    }>(`/api/candidate/sessions/${sid}/run`, {
+    http<CommandResult>(`/api/candidate/sessions/${sid}/run`, {
       method: "POST",
       body: JSON.stringify({ file_path }),
+    }),
+  terminal: (sid: string, command: string) =>
+    http<CommandResult>(`/api/candidate/sessions/${sid}/terminal`, {
+      method: "POST",
+      body: JSON.stringify({ command }),
     }),
 
   askBuddy: (body: {
@@ -180,13 +194,13 @@ export const api = {
   buddyHistory: (sid: string) =>
     http<{ role: string; content: string; at: string }[]>(`/api/buddy/history/${sid}`),
 
-  recordEvent: (body: {
-    session_id: string;
-    kind: string;
-    file_path?: string | null;
-    payload?: Record<string, unknown>;
-  }) =>
+  recordEvent: (body: ActivityEventInput) =>
     http<any>("/api/monitor/events", { method: "POST", body: JSON.stringify(body) }),
+  recordEvents: (events: ActivityEventInput[]) =>
+    http<any>("/api/monitor/events/batch", {
+      method: "POST",
+      body: JSON.stringify({ events }),
+    }),
 
   getResults: (sid: string) =>
     http<{

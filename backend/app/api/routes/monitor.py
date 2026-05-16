@@ -20,6 +20,10 @@ class EventIn(BaseModel):
     payload: dict = {}
 
 
+class EventBatchIn(BaseModel):
+    events: list[EventIn]
+
+
 @router.post("/events", response_model=ActivityEvent)
 async def record_event(body: EventIn) -> ActivityEvent:
     if not await store.get_session(body.session_id):
@@ -32,6 +36,29 @@ async def record_event(body: EventIn) -> ActivityEvent:
     )
     await store.append_event(event)
     return event
+
+
+@router.post("/events/batch", response_model=list[ActivityEvent])
+async def record_events_batch(body: EventBatchIn) -> list[ActivityEvent]:
+    if not body.events:
+        return []
+
+    out: list[ActivityEvent] = []
+    seen_sessions: set[str] = set()
+    for item in body.events:
+        if item.session_id not in seen_sessions:
+            if not await store.get_session(item.session_id):
+                raise HTTPException(404, f"session not found: {item.session_id}")
+            seen_sessions.add(item.session_id)
+        event = ActivityEvent(
+            session_id=item.session_id,
+            kind=item.kind,
+            file_path=item.file_path,
+            payload=item.payload,
+        )
+        await store.append_event(event)
+        out.append(event)
+    return out
 
 
 @router.get("/events/{session_id}", response_model=list[ActivityEvent])
