@@ -38,27 +38,93 @@ Unlike traditional MCQ/coding tests, GenEx drops candidates into a **realistic d
 - **Storage** — Async pluggable store (`memory` or `postgres`)
 - **LLM** — Configurable provider. Groq is supported, and local OpenAI-compatible endpoints such as Ollama-hosted `qwen2.5-coder:0.5b` are supported too.
 
-## Getting started
+## How to run this project
 
 ### Prerequisites
+
 - Python 3.11+
 - Node.js 20+
-- Either:
-  - a Groq API key
-  - or a local OpenAI-compatible endpoint such as Ollama serving `qwen2.5-coder:0.5b`
+- `npm`
+- One LLM option:
+  - Groq API key, or
+  - local OpenAI-compatible endpoint such as Ollama
 
-### Backend
+## Option 1: Run locally
+
+This is the easiest way to start the project for development.
+
+### 1. Clone and open the project
+
+```bash
+git clone <your-repo-url>
+cd genex-platform
+```
+
+### 2. Start the backend
+
+Open a terminal and run:
 
 ```bash
 cd backend
-python -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env       # then add your GROQ_API_KEY
+cp .env.example .env
+```
+
+Important:
+
+- The backend reads environment variables from `backend/.env`
+- `backend/app/.env` is not the main file used when you run `uvicorn` from the `backend` folder
+
+Edit `backend/.env` and choose one setup:
+
+For the simplest local setup, use in-memory storage:
+
+```env
+STORE_BACKEND=memory
+
+LLM_PROVIDER=groq
+LLM_API_KEY=your_groq_api_key
+LLM_MODEL=llama-3.3-70b-versatile
+LLM_API_BASE=
+
+ALLOW_ORIGINS=http://localhost:3000
+LOG_LEVEL=INFO
+APP_BASE_URL=http://localhost:3000
+RESEND_API_KEY=
+RESEND_FROM_EMAIL=GenEx <onboarding@resend.dev>
+```
+
+If you want to use Ollama instead of Groq:
+
+```env
+STORE_BACKEND=memory
+
+LLM_PROVIDER=openai_compatible
+LLM_API_KEY=ollama
+LLM_MODEL=qwen2.5-coder:0.5b
+LLM_API_BASE=http://localhost:11434/v1
+
+ALLOW_ORIGINS=http://localhost:3000
+LOG_LEVEL=INFO
+APP_BASE_URL=http://localhost:3000
+```
+
+Now start the API:
+
+```bash
 uvicorn app.main:app --reload --port 8000
 ```
 
-### Frontend
+Backend will be available at:
+
+- `http://localhost:8000`
+- health check: `http://localhost:8000/health`
+
+### 3. Start the frontend
+
+Open a second terminal and run:
 
 ```bash
 cd frontend
@@ -67,18 +133,66 @@ cp .env.local.example .env.local
 npm run dev
 ```
 
-Open http://localhost:3000.
+The default frontend env file should contain:
 
-## Single sandbox environment
+```env
+NEXT_PUBLIC_API_URL=http://localhost:8000
+NEXT_PUBLIC_WS_URL=ws://localhost:8000
+```
 
-The repo now includes a bind-mounted Docker/Dev Container setup for a single
-workspace environment plus Postgres and an OpenAI-compatible model endpoint.
+Frontend will be available at:
 
-See:
+- `http://localhost:3000`
 
-- `docs/single-sandbox-environment.md`
-- `.devcontainer/devcontainer.json`
+### 4. Open the app
+
+Use these pages in your browser:
+
+- `http://localhost:3000` for the landing page
+- `http://localhost:3000/employer/new` to create an assessment
+
+Notes:
+
+- If `RESEND_API_KEY` is empty, invite emails are skipped, but the invite link still works and can be copied from the UI
+- If you use `STORE_BACKEND=memory`, data resets whenever the backend restarts
+
+## Option 2: Run with Docker Compose
+
+Use this if you want Postgres and a containerized local environment.
+
+From the project root:
+
+```bash
+docker compose up --build
+```
+
+This starts:
+
+- frontend on `http://localhost:3000`
+- backend on `http://localhost:8000`
+- Postgres on `localhost:5434`
+- Ollama on `http://localhost:11434`
+
+The Docker setup is already wired to use:
+
+- `STORE_BACKEND=postgres`
+- `DATABASE_URL=postgresql://postgres:postgres@postgres:5432/genex`
+- `LLM_PROVIDER=openai_compatible`
+- `LLM_API_BASE=http://ollama:11434/v1`
+- `LLM_MODEL=qwen2.5-coder:0.5b`
+
+Related files:
+
 - `docker-compose.yml`
+- `.devcontainer/devcontainer.json`
+- `docs/single-sandbox-environment.md`
+
+## Common issues
+
+- If the frontend loads but API calls fail, make sure the backend is running on port `8000`
+- If CORS errors appear, confirm `ALLOW_ORIGINS=http://localhost:3000` in `backend/.env`
+- If Groq requests fail, verify your `LLM_API_KEY` or `GROQ_API_KEY`
+- If using Ollama, make sure the Ollama server is running and the model is available locally
 
 ## Project layout
 
