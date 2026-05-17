@@ -37,7 +37,14 @@ async def ask_buddy(req: BuddyRequest) -> BuddyResponse:
 
     history = await store.get_buddy_history(req.session_id)
     session_events = await store.get_events(req.session_id)
-    enriched = BuddyRequest(**{**req.model_dump(), "history": history})
+    mode_override = (
+        active_challenge.buddy_mode
+        if active_challenge and getattr(active_challenge, "buddy_mode", None)
+        else req.mode
+    )
+    enriched = BuddyRequest(
+        **{**req.model_dump(), "history": history, "mode": mode_override}
+    )
 
     await store.append_buddy_turn(
         req.session_id,

@@ -1,9 +1,14 @@
-"""Buddy — scoped engineering mentor for the candidate IDE."""
+"""Buddy — scoped engineering mentor for the candidate IDE.
+
+v6: hint-ladder mode (STRICT / MODERATE / GUIDED), structured section layout,
+and mode-aware edit gating. The system prompt lives at app.prompts.library.BUDDY.
+"""
 from __future__ import annotations
 
 import json
 import logging
 import re
+from typing import Literal
 
 from app.core.llm import complete_json
 from app.models.schemas import (
@@ -18,10 +23,26 @@ from app.prompts.library import BUDDY
 
 log = logging.getLogger(__name__)
 
+Mode = Literal["STRICT", "MODERATE", "GUIDED"]
+HintLevel = Literal["nudge", "guide", "concrete"]
+LadderLevel = int  # 1..4
+
 _MAX_FILE_CHARS = 8000
 _MAX_GROUNDING_CHARS = 3500
+_DEFAULT_MODE: Mode = "MODERATE"
 
-# Student explicitly asked Buddy to write/apply code (RULE 4).
+# Section headers required for every non-blocked reply. We match on the plain
+# text (no emoji) so encoding/rendering differences cannot break validation.
+_REQUIRED_SECTIONS = (
+    "WHAT'S HAPPENING",
+    "ISSUES",
+    "WHY THIS WORKS",
+    "THINK ABOUT THIS",
+    "NEXT STEP",
+)
+_CHANGES_SECTION = "CHANGES"
+
+# Student explicitly asked Buddy to write/apply code.
 _EXPLICIT_CODE = re.compile(
     r"(?i)\b("
     r"make\s+(this|the)\s+change|apply\s+(this|the|it)|"
@@ -30,7 +51,10 @@ _EXPLICIT_CODE = re.compile(
     r"go\s+ahead\s+and\s+(fix|change|apply|implement)|"
     r"please\s+(apply|implement|write)\s+(this|it)|"
     r"\bapply\s+the\s+(fix|change|patch)\b|"
-    r"\bmake\s+the\s+(change|edit|fix)\b"
+    r"\bmake\s+the\s+(change|edit|fix)\b|"
+    r"\bfix\s+(this|it)\b|"
+    r"\bupdate\s+(this|it)\b|"
+    r"\bjust\s+do\s+it\b"
     r")\b"
 )
 
@@ -41,11 +65,12 @@ _FULL_SOLUTION = re.compile(
     r"give\s+me\s+the\s+(full|complete|entire)\s+(solution|answer|code)|"
     r"do\s+(the\s+)?(whole|entire|full)\s+(ticket|assessment|task)\s+for\s+me|"
     r"solve\s+(the\s+)?(whole|entire|full)\s+(ticket|problem)|"
-    r"complete\s+(the\s+)?(whole|entire)\s+(ticket|assessment)\s+for\s+me"
+    r"complete\s+(the\s+)?(whole|entire)\s+(ticket|assessment)\s+for\s+me|"
+    r"write\s+the\s+whole\s+thing"
     r")\b"
 )
 
-# Clearly unrelated to ticket/codebase (general trivia, other stacks, etc.).
+# Clearly unrelated to ticket/codebase.
 _OUT_OF_SCOPE = re.compile(
     r"(?i)\b("
     r"what\s+is\s+the\s+capital\s+of|who\s+won\s+the|"
@@ -57,14 +82,14 @@ _OUT_OF_SCOPE = re.compile(
     r")\b"
 )
 
+# Verbatim scope and full-solution redirects from the v6 spec.
 _SCOPE_REDIRECT = (
-    "I can only help with your current ticket and codebase. "
-    "Let's stay focused — what part of **{title}** are you working on?"
+    "I can't help with that — I'm here for your assessment. "
+    "Ask me anything about the ticket or the code."
 )
-
-_SHORTCUT_REDIRECT = (
-    "I get the urge to skip ahead — but that's not how we do it here. "
-    "Tell me what you understand about the requirement first, and we'll work through it together."
+_FULL_SOLUTION_REDIRECT = (
+    "You're closer than you think. Tell me where it's blocking you "
+    "and we'll fix that part."
 )
 
 _LLM_UNAVAILABLE_HINT = (
@@ -93,11 +118,11 @@ _STUCK_VAGUE = re.compile(
     r"what\s+next|what\s+now|what\s+do\s+i\s+do|"
     r"i'?m\s+stuck|i\s+am\s+stuck|"
     r"what\s+should\s+i\s+do|"
-    r"let'?s\s+go|continue|keep\s+going"
+    r"let'?s\s+go|continue|keep\s+going|"
+    r"just\s+fix\s+it\s+for\s+me"
     r")[\s!.?,]*$"
 )
 
-# Strike 3: student wants an illustrative sample (syntax/query/example), not file apply.
 _CODE_SAMPLE_REQUEST = re.compile(
     r"(?i)\b("
     r"show\s+me\s+(the\s+)?(code|syntax|example|query|snippet)|"
@@ -148,6 +173,8 @@ _VAGUE_QUESTION = re.compile(
 )
 
 
+# ── trimming helpers ─────────────────────────────────────────────────────────
+
 def _trim_workspace(ws: dict[str, str]) -> dict[str, str]:
     return {
         p: (c if len(c) <= _MAX_FILE_CHARS else c[:_MAX_FILE_CHARS] + "\n# ...(truncated)")
@@ -166,6 +193,8 @@ def _trim_grounding(files: dict[str, str]) -> dict[str, str]:
     }
 
 
+# ── intent detection ────────────────────────────────────────────────────────
+
 def _explicit_code_request(text: str) -> bool:
     return bool(_EXPLICIT_CODE.search(text))
 
@@ -179,7 +208,6 @@ def _looks_out_of_scope(text: str, *, has_ticket: bool) -> bool:
         return False
     if _OUT_OF_SCOPE.search(text):
         return True
-    # Very short generic coding questions with no ticket/code tie-in
     if re.match(
         r"(?i)^(how do i|what is|explain)\s+(python|javascript|java|go)\s*\??$",
         text.strip(),
@@ -215,17 +243,14 @@ def _is_vague_question(text: str) -> bool:
 
 
 def _asks_what_code_does(question: str) -> bool:
-    """Student wants an explanation of code or a concept (v5 decision branch 3)."""
     return bool(_ASKS_WHAT_CODE_DOES.search(question.strip()))
 
 
 def _student_needs_explanation(question: str) -> bool:
-    """Student signals confusion — explain first, do not deflect with questions."""
     return bool(_NEEDS_EXPLANATION.search(question.strip()))
 
 
 def _student_repeated_question(question: str, history: list[dict]) -> bool:
-    """Same or very similar question asked again in this session."""
     q = _normalize_compare(question)
     if len(q) < 12:
         return False
@@ -243,7 +268,6 @@ def _student_repeated_question(question: str, history: list[dict]) -> bool:
 
 
 def _student_shared_code(question: str, selection: str | None) -> bool:
-    """Student pasted or selected real code — respond with line-specific feedback."""
     if selection and len(selection.strip()) >= 12:
         if _CODE_IN_MESSAGE.search(selection) or "```" in selection:
             return True
@@ -270,7 +294,7 @@ def _student_shared_code(question: str, selection: str | None) -> bool:
 def _code_escalation_strike(
     history: list[dict], question: str, *, shared_code: bool
 ) -> int:
-    """Gear level hint for the model; v5 allows Gear 3 when student needs explanation."""
+    """1..3. Used as one of the inputs to the hint-ladder calculation."""
     if (
         shared_code
         or _asks_for_code_sample(question)
@@ -288,27 +312,7 @@ def _code_escalation_strike(
     return 1
 
 
-def _strip_code_fences(hint: str) -> str:
-    """Remove fenced code when strike < 3."""
-    cleaned = re.sub(
-        r"```[\w]*\s*[\s\S]*?```",
-        "",
-        hint,
-    ).strip()
-    return re.sub(r"\n{3,}", "\n\n", cleaned)
-
-
-def _hint_level_for_strike(
-    strike: int, *, explicit_code: bool, has_edits: bool
-) -> str:
-    if has_edits and explicit_code:
-        return "concrete"
-    if strike >= 3:
-        return "guide"
-    if strike >= 2:
-        return "guide"
-    return "nudge"
-
+# ── session/context helpers ─────────────────────────────────────────────────
 
 def _last_buddy_message(history: list[dict]) -> str | None:
     for turn in reversed(history):
@@ -342,7 +346,6 @@ def _too_similar_to_last(new_hint: str, last_buddy: str | None) -> bool:
 
 
 def _last_buddy_challenge_id(events: list[ActivityEvent]) -> str | None:
-    """Challenge_id from the most recent Buddy query (before the current one)."""
     last: str | None = None
     for event in events:
         if event.kind != EventKind.BUDDY_QUERY:
@@ -393,8 +396,90 @@ def _ticket_payload(challenge: CandidateChallenge | None) -> dict | None:
     }
 
 
+# ── hint-ladder logic ───────────────────────────────────────────────────────
+
+def _resolve_mode(req: BuddyRequest, challenge: CandidateChallenge | None) -> Mode:
+    """Active challenge wins; client-provided req.mode only used as a fallback."""
+    if challenge and getattr(challenge, "buddy_mode", None) in ("STRICT", "MODERATE", "GUIDED"):
+        return challenge.buddy_mode  # type: ignore[return-value]
+    if req.mode in ("STRICT", "MODERATE", "GUIDED"):
+        return req.mode  # type: ignore[return-value]
+    return _DEFAULT_MODE
+
+
+def _ladder_level(
+    mode: Mode,
+    *,
+    strike: int,
+    explicit_code: bool,
+    shared_code: bool,
+    needs_explanation: bool,
+    asks_what_code: bool,
+    asks_example: bool,
+    repeated: bool,
+) -> LadderLevel:
+    """L1..L4. Mode acts as a hard ceiling.
+
+    STRICT   → L1 baseline, L2 ceiling.
+    MODERATE → L1 baseline, L3 freely, L4 only after 2 failed attempts or
+               explicit code request with strike ≥ 3.
+    GUIDED   → L1 baseline, L4 available after 1 attempt.
+    """
+    wants_concrete = (
+        explicit_code
+        or shared_code
+        or needs_explanation
+        or asks_what_code
+        or asks_example
+        or repeated
+    )
+
+    if mode == "STRICT":
+        # No diffs ever — cap at L2.
+        return 2 if (wants_concrete or strike >= 2) else 1
+
+    if mode == "GUIDED":
+        if wants_concrete or strike >= 2:
+            return 4
+        if strike >= 1:
+            return 3
+        return 2
+
+    # MODERATE (default)
+    if explicit_code and strike >= 2:
+        return 4
+    if wants_concrete and strike >= 3:
+        return 4
+    if wants_concrete or strike >= 2:
+        return 3
+    if strike >= 1:
+        return 2
+    return 1
+
+
+def _level_to_hint_level(level: LadderLevel) -> HintLevel:
+    if level >= 4:
+        return "concrete"
+    if level >= 3:
+        return "guide"
+    return "nudge"
+
+
+# ── response validation ─────────────────────────────────────────────────────
+
+def _has_required_sections(hint: str) -> bool:
+    return all(marker in hint for marker in _REQUIRED_SECTIONS)
+
+
+def _has_changes_section(hint: str) -> bool:
+    return _CHANGES_SECTION in hint
+
+
 def _normalize_edits(
-    raw: object, workspace: dict[str, str], *, allow: bool
+    raw: object,
+    workspace: dict[str, str],
+    *,
+    allow: bool,
 ) -> list[BuddyEdit]:
     if not allow or not isinstance(raw, list):
         return []
@@ -418,14 +503,15 @@ def _normalize_edits(
     return edits
 
 
-def _clamp_hint_length(hint: str, max_words: int = 180, *, allow_long: bool = False) -> str:
-    if allow_long:
-        max_words = 320
+def _clamp_hint_length(hint: str, max_words: int = 600) -> str:
+    """The v6 layout is structurally bounded — a generous ceiling is enough."""
     words = hint.split()
     if len(words) <= max_words:
         return hint
-    return " ".join(words[:max_words]) + "\n\n*(Let's take this one step at a time — ask a follow-up if you need more.)*"
+    return " ".join(words[:max_words]) + "\n\n*(Truncated — ask a follow-up if you need more.)*"
 
+
+# ── main entry point ────────────────────────────────────────────────────────
 
 async def run(
     req: BuddyRequest,
@@ -445,15 +531,14 @@ async def run(
     ]
     workspace = _trim_workspace(req.workspace) if req.workspace else {}
     ticket = _ticket_payload(active_challenge)
-    ticket_title = (ticket or {}).get("title", "your ticket")
+    ticket_has = ticket is not None
 
     explicit_code = _explicit_code_request(req.question)
     shared_code = _student_shared_code(req.question, req.selection)
-    code_strike = _code_escalation_strike(
-        history, req.question, shared_code=shared_code
-    )
+    strike = _code_escalation_strike(history, req.question, shared_code=shared_code)
+
     full_solution = _looks_full_solution(req.question)
-    out_of_scope = _looks_out_of_scope(req.question, has_ticket=ticket is not None)
+    out_of_scope = _looks_out_of_scope(req.question, has_ticket=ticket_has)
     greeting = _is_greeting_or_small_talk(req.question)
     stuck_vague = _is_stuck_vague(req.question) and not shared_code
 
@@ -462,14 +547,39 @@ async def run(
     asks_example = _asks_for_code_sample(req.question)
     repeated_question = _student_repeated_question(req.question, history)
 
-    may_include_code_sample = (
-        code_strike >= 3
-        or shared_code
-        or asks_what_code
-        or needs_explanation
-        or asks_example
-        or repeated_question
+    mode = _resolve_mode(req, active_challenge)
+    ladder_level = _ladder_level(
+        mode,
+        strike=strike,
+        explicit_code=explicit_code,
+        shared_code=shared_code,
+        needs_explanation=needs_explanation,
+        asks_what_code=asks_what_code,
+        asks_example=asks_example,
+        repeated=repeated_question,
     )
+    hint_level: HintLevel = _level_to_hint_level(ladder_level)
+
+    # Edits are gated by: explicit request, mode allowing L4, AND ladder reached L4.
+    edits_allowed = explicit_code and mode != "STRICT" and ladder_level >= 4
+
+    # ── short-circuit: out of scope ─────────────────────────────────────────
+    if out_of_scope:
+        return BuddyResponse(
+            hint=_SCOPE_REDIRECT,
+            hint_level="nudge",
+            blocked=True,
+            edits=[],
+        )
+
+    # ── short-circuit: full-solution demand ────────────────────────────────
+    if full_solution:
+        return BuddyResponse(
+            hint=_FULL_SOLUTION_REDIRECT,
+            hint_level="nudge",
+            blocked=True,
+            edits=[],
+        )
 
     grounding = _trim_grounding(_grounding_files(workspace, ticket, req.open_file))
     if greeting and not shared_code:
@@ -481,36 +591,24 @@ async def run(
         and not ticket_switched
     )
 
-    if out_of_scope:
-        return BuddyResponse(
-            hint=_SCOPE_REDIRECT.format(title=ticket_title),
-            hint_level="nudge",
-            blocked=True,
-            edits=[],
-        )
-
-    if full_solution:
-        return BuddyResponse(
-            hint=_SHORTCUT_REDIRECT,
-            hint_level="nudge",
-            blocked=True,
-            edits=[],
-        )
-
     payload = {
         "active_ticket": ticket,
         "ticket_switched": ticket_switched,
         "ticket_grounding_files": grounding,
         "workspace_paths": sorted(workspace.keys()),
+        "mode": mode,
+        "hint_ladder_level": ladder_level,
+        "hint_level": hint_level,
+        "edits_allowed": edits_allowed,
         "student_shared_code": shared_code,
         "student_asks_what_code_does": asks_what_code,
         "student_needs_explanation": needs_explanation,
         "student_asks_for_example": asks_example,
         "student_repeated_question": repeated_question,
-        "code_escalation_strike": code_strike,
-        "may_include_code_sample": may_include_code_sample,
+        "code_escalation_strike": strike,
         "explicit_code_request": explicit_code,
         "out_of_scope": False,
+        "full_solution_demand": False,
         "is_greeting_or_small_talk": greeting,
         "student_stuck_vague": stuck_vague,
         "avoid_repetition": avoid_repetition,
@@ -526,14 +624,15 @@ async def run(
             _prior_challenge,
             challenge_id,
         )
+
     user = json.dumps(payload, indent=2)
 
     async def _call_buddy(extra_note: str = "") -> dict:
         u = user
         if extra_note:
             u = json.dumps({**payload, "retry_note": extra_note}, indent=2)
-        tokens = 1400 if may_include_code_sample else 900
-        result = await complete_json(BUDDY, u, temperature=0.55, max_tokens=tokens)
+        tokens = 1800 if ladder_level >= 3 else 1100
+        result = await complete_json(BUDDY, u, temperature=0.5, max_tokens=tokens)
         return result if isinstance(result, dict) else {"hint": str(result)}
 
     try:
@@ -546,7 +645,7 @@ async def run(
             blocked=False,
             edits=[],
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — network/SDK failures vary by provider
         log.warning("Buddy LLM request failed: %s", exc)
         err = str(exc).lower()
         hint = (
@@ -562,55 +661,66 @@ async def run(
         )
 
     if not isinstance(data, dict):
-        data = {"hint": str(data), "hint_level": "nudge", "blocked": False, "edits": []}
+        data = {"hint": str(data), "hint_level": hint_level, "blocked": False, "edits": []}
 
     hint = str(data.get("hint") or "").strip()
-    if not hint:
-        hint = "What part of the ticket are you tackling right now?"
+    blocked_from_model = bool(data.get("blocked", False))
 
+    # If the model claimed blocked (e.g. it detected out-of-scope we missed),
+    # short-circuit with whatever single line it returned.
+    if blocked_from_model:
+        return BuddyResponse(
+            hint=hint or _SCOPE_REDIRECT,
+            hint_level="nudge",
+            blocked=True,
+            edits=[],
+        )
+
+    # Structure validation: every non-blocked reply must carry the layout.
+    if not hint or not _has_required_sections(hint):
+        log.info("Buddy reply missing required sections; retrying with explicit reminder")
+        try:
+            data = await _call_buddy(
+                "Your previous reply did not include the required sections. "
+                "Emit EVERY section header literally: WHAT'S HAPPENING, ISSUES, "
+                "WHY THIS WORKS, THINK ABOUT THIS, NEXT STEP. Include CHANGES only "
+                "if you proposed edits. Use the exact emoji + uppercase headers."
+            )
+            hint = str(data.get("hint") or hint).strip()
+        except Exception:  # noqa: BLE001 — retry is best-effort
+            pass
+
+    # Anti-repetition: rerun once if the structured reply is too similar.
     if _too_similar_to_last(hint, last_buddy):
         log.info("Buddy reply too similar to last message; retrying with new angle")
         try:
             data = await _call_buddy(
                 "Your last reply was too similar to your previous message. "
-                "Do not repeat yourself or ask the same question again. "
-                "Explain more directly — name the exact issue, show a commented code example, "
-                "and give one clear next step."
+                "Change angle — name a different concrete issue, point at a different "
+                "file/line, and give a different next step. Keep the section layout."
             )
             hint = str(data.get("hint") or hint).strip()
-        except Exception:
+        except Exception:  # noqa: BLE001 — retry is best-effort
             pass
 
-    if not may_include_code_sample and "```" in hint:
-        hint = _strip_code_fences(hint)
+    hint = _clamp_hint_length(hint)
 
-    hint = _clamp_hint_length(
-        hint, allow_long=may_include_code_sample and (needs_explanation or shared_code)
-    )
+    edits = _normalize_edits(data.get("edits"), workspace, allow=edits_allowed)
 
-    edits = _normalize_edits(data.get("edits"), workspace, allow=explicit_code)
-    hint_level = _hint_level_for_strike(
-        code_strike, explicit_code=explicit_code, has_edits=bool(edits)
-    )
-    if (shared_code or needs_explanation or asks_what_code) and not explicit_code:
-        hint_level = "guide" if not may_include_code_sample else "concrete"
-
-    if explicit_code and edits:
-        hint_level = "concrete"
-        if "apply" not in hint.lower() and "dismiss" not in hint.lower():
-            hint += (
-                "\n\nI've proposed the change(s) below — review them and hit **Apply** "
-                "if they look right, or **Dismiss** to keep editing yourself."
-            )
-    elif explicit_code and not edits:
-        hint += (
-            "\n\nYou asked me to make a change — tell me which file and what to change, "
-            'and say **"apply this"** so I can propose an edit card.'
+    # If the model returned edits but our gating forbids them, drop them.
+    if edits and not edits_allowed:
+        log.info(
+            "Buddy returned edits but gating disallowed (mode=%s, level=%d, explicit=%s) — dropping",
+            mode, ladder_level, explicit_code,
         )
+        edits = []
+
+    # Final hint_level is what the ladder said, but bump to concrete if edits survived.
+    final_hint_level: HintLevel = "concrete" if edits else hint_level
 
     return BuddyResponse(
-        hint=hint,
-        hint_level=hint_level,  # type: ignore[arg-type]
-        blocked=bool(data.get("blocked", False)),
+        hint=hint or _LLM_UNAVAILABLE_HINT,
+        hint_level=final_hint_level,
+        blocked=False,
         edits=edits,
     )
