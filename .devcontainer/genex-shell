@@ -1,0 +1,13 @@
+#!/bin/bash
+set -euo pipefail
+
+if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
+  echo "GenEx assessment terminal cannot run as root." >&2
+  exit 1
+fi
+
+export GENEX_SESSION_ROOT="${GENEX_SESSION_ROOT:-$(pwd -P)}"
+export HOME="$GENEX_SESSION_ROOT"
+export BASH_ENV="/usr/local/etc/genex-shell-rc.sh"
+
+exec /bin/bash --noprofile --rcfile /usr/local/etc/genex-shell-rc.sh -i

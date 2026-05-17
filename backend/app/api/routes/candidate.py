@@ -41,6 +41,7 @@ LANG_RUNNERS: dict[str, list[str]] = {
 
 RUN_TIMEOUT_SECONDS = 10
 RUN_OUTPUT_CAP = 8000  # cap each stream to keep the UI snappy
+BLOCKED_TERMINAL_COMMANDS = {"bash", "sh", "zsh", "sudo", "su"}
 
 
 class StartSessionIn(BaseModel):
@@ -360,6 +361,14 @@ async def run_terminal_command(session_id: str, body: TerminalIn) -> RunOut:
         cmd = shlex.split(command)
     except ValueError as e:
         raise HTTPException(400, f"invalid command: {e}") from e
+    if not cmd:
+        raise HTTPException(400, "command is required")
+    head = cmd[0].strip()
+    if head in BLOCKED_TERMINAL_COMMANDS or "/" in head:
+        raise HTTPException(
+            400,
+            "That terminal command is disabled in the assessment environment.",
+        )
 
     result = await _execute_workspace_command(session, cmd, command)
     await store.append_event(ActivityEvent(

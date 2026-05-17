@@ -61,8 +61,12 @@ EOF
 # Copy GenEx sync server and entrypoint
 COPY .devcontainer/sandbox-sync-server.py /usr/local/bin/sandbox-sync-server.py
 COPY .devcontainer/sandbox-entrypoint.sh /usr/local/bin/sandbox-entrypoint.sh
+COPY .devcontainer/genex-shell /usr/local/bin/genex-shell
+COPY .devcontainer/genex-shell-rc.sh /usr/local/etc/genex-shell-rc.sh
 RUN chmod +x /usr/local/bin/sandbox-sync-server.py \
     && chmod +x /usr/local/bin/sandbox-entrypoint.sh \
+    && chmod +x /usr/local/bin/genex-shell \
+    && chmod +x /usr/local/etc/genex-shell-rc.sh \
     && mkdir -p /home/coder/sessions \
     && chown -R 1000:1000 /home/coder/sessions
 
