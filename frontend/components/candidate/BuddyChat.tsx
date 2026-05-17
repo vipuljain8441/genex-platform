@@ -31,14 +31,22 @@ const HINT_TONE: Record<string, string> = {
 
 export function BuddyChat({
   sessionId,
+  challengeId,
+  disabled,
+  disabledReason,
   openFile,
+  selection,
   workspace,
   onApplyEdit,
   onDismissEdit,
 }: {
   sessionId: string;
-  openFile: string | null;
-  workspace: Record<string, string>;
+  challengeId?: string | null;
+  disabled?: boolean;
+  disabledReason?: string;
+  openFile?: string | null;
+  selection?: string | null;
+  workspace?: Record<string, string>;
   onApplyEdit?: (filePath: string, newContent: string, rationale: string) => void;
   onDismissEdit?: (filePath: string, rationale: string) => void;
 }) {
@@ -46,17 +54,19 @@ export function BuddyChat({
   const [q, setQ] = useState("");
   const [busy, setBusy] = useState(false);
   const scroll = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  function resizeTextarea() {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+  }
 
   useEffect(() => {
-    api.buddyHistory(sessionId).then((h) => {
-      setMsgs(
-        h.map((t) => ({
-          role: t.role === "buddy" ? "buddy" : "user",
-          content: t.content,
-        }))
-      );
-    });
-  }, [sessionId]);
+    setMsgs([]);
+    setQ("");
+  }, [sessionId, challengeId]);
 
   useEffect(() => {
     scroll.current?.scrollTo({ top: scroll.current.scrollHeight, behavior: "smooth" });
@@ -64,16 +74,22 @@ export function BuddyChat({
 
   async function send() {
     const text = q.trim();
-    if (!text || busy) return;
+    if (!text || busy || disabled) return;
     setMsgs((m) => [...m, { role: "user", content: text }]);
     setQ("");
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (el) el.style.height = "auto";
+    });
     setBusy(true);
     try {
       const r = await api.askBuddy({
         session_id: sessionId,
         question: text,
-        open_file: openFile,
-        workspace,
+        challenge_id: challengeId,
+        open_file: openFile ?? undefined,
+        selection: selection || undefined,
+        workspace: workspace ?? {},
       });
       const edits = (r.edits || []).map((e) => ({ ...e, status: "pending" as const }));
       setMsgs((m) => [
@@ -86,10 +102,18 @@ export function BuddyChat({
           edits,
         },
       ]);
-    } catch {
+    } catch (e: unknown) {
+      const detail =
+        e instanceof Error ? e.message.replace(/^Error:\s*/, "") : "Request failed";
+      const friendly =
+        detail.includes("502") || detail.includes("500") || detail.includes("503")
+          ? "I couldn't reach Buddy right now — your message is saved. Try again in a moment."
+          : detail.length > 120
+            ? "Something went wrong talking to Buddy. Try again."
+            : detail;
       setMsgs((m) => [
         ...m,
-        { role: "buddy", content: "Hmm — I lost the thread. Try again?" },
+        { role: "buddy", content: friendly },
       ]);
     } finally {
       setBusy(false);
@@ -135,7 +159,7 @@ export function BuddyChat({
         <div>
           <div className="text-sm font-medium">Buddy</div>
           <div className="text-[10px] uppercase tracking-wider text-bone/40">
-            Helpful · review before you apply
+            Mentor · guides first · you apply edits
           </div>
         </div>
       </div>
@@ -143,7 +167,9 @@ export function BuddyChat({
       <div ref={scroll} className="flex-1 overflow-y-auto scrollbar-thin p-4 space-y-3">
         {msgs.length === 0 && (
           <div className="text-sm text-bone/45 text-center py-10">
-            Ask Buddy for a fix or an explanation — proposed edits show up with Apply / Dismiss.
+            {disabled
+              ? (disabledReason || "Buddy is disabled for this challenge.")
+              : "Ask about your ticket or codebase. Say \"apply this\" when you want me to propose an edit you can review."}
           </div>
         )}
         <AnimatePresence initial={false}>
@@ -153,9 +179,9 @@ export function BuddyChat({
               initial={{ opacity: 0, y: 6 }}
               animate={{ opacity: 1, y: 0 }}
               className={cn(
-                "max-w-[92%] rounded-2xl px-3.5 py-2.5 text-sm",
+                "max-w-[92%] rounded-2xl px-3.5 py-2.5 text-sm break-words [overflow-wrap:anywhere]",
                 m.role === "user"
-                  ? "ml-auto bg-accent/15 border border-accent/25 text-bone"
+                  ? "ml-auto bg-accent/15 border border-accent/25 text-bone whitespace-pre-wrap"
                   : "bg-white border border-black/[0.06] text-bone/85 shadow-soft"
               )}
             >
@@ -175,9 +201,15 @@ export function BuddyChat({
                   )}
                 </div>
               )}
-              <div className="prose prose-sm max-w-none [&_p]:my-0 [&_pre]:!bg-ink-100 [&_pre]:!text-bone [&_code]:!text-accent-deep">
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content}</ReactMarkdown>
-              </div>
+              {m.role === "user" ? (
+                <p className="whitespace-pre-wrap break-words [overflow-wrap:anywhere] leading-relaxed">
+                  {m.content}
+                </p>
+              ) : (
+                <div className="prose prose-sm max-w-none break-words [overflow-wrap:anywhere] [&_p]:my-0 [&_pre]:!bg-ink-100 [&_pre]:!text-bone [&_pre]:whitespace-pre-wrap [&_code]:!text-accent-deep">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content}</ReactMarkdown>
+                </div>
+              )}
 
               {/* Edit cards */}
               {m.edits && m.edits.length > 0 && (
@@ -199,18 +231,34 @@ export function BuddyChat({
       </div>
 
       <div className="border-t border-black/[0.06] p-3">
-        <div className="flex gap-2">
-          <input
+        <div className="flex gap-2 items-end">
+          <textarea
+            ref={textareaRef}
+            rows={1}
             value={q}
-            onChange={(e) => setQ(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && send()}
-            placeholder="Ask buddy a question or for a fix…"
-            className="flex-1 bg-ink-100 text-bone placeholder:text-bone/35 border border-black/[0.06] rounded-xl px-3 py-2 text-sm outline-none focus:bg-white focus:border-accent/50"
+            onChange={(e) => {
+              setQ(e.target.value);
+              resizeTextarea();
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                send();
+              }
+            }}
+            placeholder={
+              disabled
+                ? "Buddy is disabled for this challenge"
+                : "Ask Buddy… (Enter to send, Shift+Enter for new line)"
+            }
+            disabled={disabled}
+            className="flex-1 min-h-[42px] max-h-40 resize-none overflow-y-auto bg-ink-100 text-bone placeholder:text-bone/35 border border-black/[0.06] rounded-xl px-3 py-2 text-sm leading-relaxed whitespace-pre-wrap break-words [overflow-wrap:anywhere] outline-none focus:bg-white focus:border-accent/50 disabled:opacity-50"
           />
           <button
+            type="button"
             onClick={send}
-            disabled={busy}
-            className="px-3 py-2 rounded-xl bg-accent text-white disabled:opacity-40 hover:bg-accent-deep transition"
+            disabled={busy || disabled}
+            className="shrink-0 px-3 py-2 rounded-xl bg-accent text-white disabled:opacity-40 hover:bg-accent-deep transition"
           >
             <Send className="h-4 w-4" />
           </button>

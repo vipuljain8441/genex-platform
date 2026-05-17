@@ -44,9 +44,10 @@ function CandidateStartInner() {
             Welcome to the team.
           </h1>
           <p className="mt-2 text-sm text-bone/55">
-            A ticket is waiting on your board. You'll have access to the codebase
-            and a buddy who can help — but won't solve. Everything you do is
-            captured so we can show your future team how you think.
+            A sequence of challenges is waiting on your board. Some will be in the
+            codebase, some will test judgment or written reasoning. You'll have access
+            to the workspace and a buddy who can help — but won't solve. Everything you
+            do is captured so we can show your future team how you think.
           </p>
         </CardHeader>
         <CardBody className="space-y-5">

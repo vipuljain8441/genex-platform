@@ -1,3 +1,5 @@
+import type { ReportData } from "./report-types";
+
 const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 const WS = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8000";
 
@@ -35,6 +37,7 @@ export type ActivityEventInput = {
 export type RoleFamily =
   | "backend" | "frontend" | "fullstack"
   | "qa" | "devops" | "data" | "pm" | "design";
+export type ChallengeKind = "coding" | "sql" | "objective" | "theory";
 
 export type RecruiterContext = {
   domain_summary: string;
@@ -64,6 +67,69 @@ export type JobSpec = {
   recruiter_context?: RecruiterContext | null;
   codebase_source?: "generated" | "github";
   github_source?: GitHubSource | null;
+  challenge_count?: number;
+  challenge_types?: ChallengeKind[];
+};
+
+export type ObjectiveOption = {
+  id: string;
+  text: string;
+};
+
+export type ObjectiveQuestion = {
+  id: string;
+  prompt: string;
+  options: ObjectiveOption[];
+  multi_select: boolean;
+  correct_option_ids: string[];
+  explanation: string;
+};
+
+export type CandidateChallenge = {
+  id: string;
+  kind: ChallengeKind;
+  title: string;
+  description: string;
+  instructions: string;
+  acceptance_criteria: string[];
+  issues: {
+    id: string;
+    title: string;
+    description: string;
+    severity: "low" | "medium" | "high";
+  }[];
+  priority: "low" | "medium" | "high" | "critical";
+  labels: string[];
+  reporter: string;
+  assignee: string;
+  estimated_minutes: number;
+  related_files: string[];
+  workspace_enabled: boolean;
+  allow_buddy: boolean;
+  objective_questions: ObjectiveQuestion[];
+  expected_response_format: string;
+  editor_language: string;
+  starter_content: string;
+};
+
+export type ChallengeResponse = {
+  challenge_id: string;
+  challenge_kind: ChallengeKind;
+  status: "pending" | "in_progress" | "completed";
+  answer_text: string;
+  selected_option_ids: Record<string, string[]>;
+  updated_at: string;
+};
+
+export type CandidateSessionView = {
+  id: string;
+  assessment_id: string;
+  candidate_name: string;
+  started_at: string;
+  submitted_at: string | null;
+  current_challenge_id: string | null;
+  current_files: Record<string, string>;
+  challenge_responses: Record<string, ChallengeResponse>;
 };
 
 export type GitHubIssue = {
@@ -110,8 +176,21 @@ export type JiraAnalysis = {
   source_summary: string;
 };
 
+export type JDAnalysis = {
+  suggested_title: string;
+  suggested_role_family: RoleFamily | string;
+  suggested_seniority: JobSpec["seniority"] | string;
+  suggested_industry: string;
+  problem_summary: string;
+  must_have_skills: string[];
+  nice_to_have_skills: string[];
+  generated_jd: string;
+  recruiter_context: RecruiterContext;
+};
+
 export type PipelineStage =
   | "pending" | "fetching" | "extracting" | "authoring"
+  | "challenging"
   | "ticketing" | "injecting" | "ready" | "failed";
 
 export type Assessment = {
@@ -136,6 +215,7 @@ export type Assessment = {
     reporter: string;
     assignee: string;
   } | null;
+  candidate_challenges: CandidateChallenge[];
   bug_brief: any;
   created_at: string;
 };
@@ -152,15 +232,33 @@ export const api = {
     http<Assessment[]>("/api/employer/assessments"),
 
   startSession: (assessment_id: string, candidate_name: string) =>
-    http<{ session: any; assessment: Assessment }>(
+    http<{ session: CandidateSessionView; assessment: Assessment }>(
       "/api/candidate/sessions",
       { method: "POST", body: JSON.stringify({ assessment_id, candidate_name }) }
     ),
   getSession: (sid: string) =>
-    http<{ session: any; assessment: Assessment }>(`/api/candidate/sessions/${sid}`),
+    http<{ session: CandidateSessionView; assessment: Assessment }>(`/api/candidate/sessions/${sid}`),
   saveFile: (sid: string, path: string, content: string) =>
-    http<any>(`/api/candidate/sessions/${sid}/files`, {
+    http<CandidateSessionView>(`/api/candidate/sessions/${sid}/files`, {
       method: "PUT", body: JSON.stringify({ path, content }),
+    }),
+  setCurrentChallenge: (sid: string, challenge_id: string) =>
+    http<CandidateSessionView>(`/api/candidate/sessions/${sid}/current-challenge`, {
+      method: "PUT",
+      body: JSON.stringify({ challenge_id }),
+    }),
+  saveChallengeResponse: (
+    sid: string,
+    challenge_id: string,
+    body: {
+      status?: "pending" | "in_progress" | "completed";
+      answer_text?: string;
+      selected_option_ids?: Record<string, string[]>;
+    }
+  ) =>
+    http<CandidateSessionView>(`/api/candidate/sessions/${sid}/challenges/${challenge_id}/response`, {
+      method: "PUT",
+      body: JSON.stringify(body),
     }),
   submit: (sid: string) =>
     http<{ session_id: string; status: string }>(
@@ -181,6 +279,7 @@ export const api = {
   askBuddy: (body: {
     session_id: string;
     question: string;
+    challenge_id?: string | null;
     open_file?: string | null;
     selection?: string | null;
     workspace?: Record<string, string>;
@@ -207,12 +306,40 @@ export const api = {
       evaluation: any | null;
       heatmap: any;
     }>(`/api/results/${sid}`),
+  getReport: (sid: string) =>
+    http<ReportData>(`/api/results/${sid}/report`),
 
   // ── GitHub ──────────────────────────────────────────────────────────────
   getGitHubInfo: (repo_url: string) =>
     http<GitHubInfo>("/api/employer/github/info", {
       method: "POST",
       body: JSON.stringify({ repo_url }),
+    }),
+
+  // ── Sandbox (VS Code + git + SQL) ──────────────────────────────────────
+  provisionSandbox: (sessionId: string) =>
+    http<{ url: string; session_id: string }>(`/api/sandbox/provision/${sessionId}`, {
+      method: "POST",
+    }),
+  syncSandbox: (sessionId: string) =>
+    http<{ synced: number }>(`/api/sandbox/sync/${sessionId}`, { method: "POST" }),
+  commitSandbox: (sessionId: string, message?: string) =>
+    http<{ committed: boolean; session_id: string }>(
+      `/api/sandbox/commit/${sessionId}${message ? `?message=${encodeURIComponent(message)}` : ""}`,
+      { method: "POST" }
+    ),
+  getDiff: (sessionId: string) =>
+    http<{ diff: string; stat: string }>(`/api/sandbox/diff/${sessionId}`),
+  runSQL: (sessionId: string, query: string) =>
+    http<{ columns: string[]; rows: Record<string, unknown>[]; rowcount: number; error: string | null }>(
+      `/api/sandbox/sql/${sessionId}`,
+      { method: "POST", body: JSON.stringify({ query }) }
+    ),
+
+  analyzeJD: (jd_text: string) =>
+    http<JDAnalysis>("/api/employer/jd/analyze", {
+      method: "POST",
+      body: JSON.stringify({ jd_text }),
     }),
 
   analyzeJira: (body: {

@@ -1,467 +1,290 @@
 "use client";
 
 import {
-  useDeferredValue,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
   useState,
 } from "react";
-import type { ReactNode } from "react";
+import type { MouseEvent as ReactMouseEvent } from "react";
 import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import {
+  ArrowLeft,
   Clock,
-  FileCode2,
-  FolderTree,
+  Code2,
+  ListChecks,
   Loader2,
-  Play,
-  Search,
+  MessageSquareText,
+  Minus,
+  PanelRightOpen,
   Send,
-  Ticket,
+  Terminal,
   X,
 } from "lucide-react";
-import { api, type CommandResult } from "@/lib/api";
-import { monitor, type MonitorEvent } from "@/lib/monitor";
+import {
+  api,
+  type CandidateChallenge,
+  type ChallengeResponse,
+  type ObjectiveQuestion,
+} from "@/lib/api";
+import { monitor } from "@/lib/monitor";
 import { Logo } from "@/components/ui/Logo";
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
 import { cn } from "@/lib/utils";
-import { TicketPanel } from "./TicketPanel";
-import { FileTree } from "./FileTree";
-import { SearchPanel, type SearchMatch } from "./SearchPanel";
-import { CodeEditor } from "./CodeEditor";
+import { ChallengeOverview } from "./ChallengeOverview";
+import { ChallengePanel } from "./ChallengePanel";
 import { BuddyChat } from "./BuddyChat";
-import {
-  RunPanel,
-  type ActivityFeedEntry,
-  type TerminalEntry,
-} from "./RunPanel";
 
 type WorkspaceProps = {
   sessionId: string;
   assessmentId: string;
-  ticket: any;
+  challenges: CandidateChallenge[];
   initialFiles: { path: string; language: string; content: string }[];
   entryPoint: string | null;
   durationMinutes: number;
+  initialChallengeId: string | null;
+  initialResponses: Record<string, ChallengeResponse>;
 };
 
-type PanelMode = "explorer" | "search" | "ticket";
+export type SqlResult = {
+  columns: string[];
+  rows: Record<string, unknown>[];
+  rowcount: number;
+  error: string | null;
+  running: boolean;
+};
 
-const RUNNABLE_EXTS = new Set([".py", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".sh"]);
+type ViewMode = "overview" | "workspace";
+type RightTab = "challenges" | "buddy";
+type RightPanelState = "open" | "minimized" | "closed";
 
-function canRun(path: string) {
-  const dot = path.lastIndexOf(".");
-  return dot >= 0 && RUNNABLE_EXTS.has(path.slice(dot).toLowerCase());
-}
+const MIN_WIDTH = 300;
+const MAX_WIDTH = 560;
+const DEFAULT_WIDTH = 380;
+const STRIP_WIDTH = 44;
 
-function defaultCommandFor(path: string) {
-  if (path.endsWith(".py")) return `python3 ${path}`;
-  if (path.endsWith(".ts") || path.endsWith(".tsx")) return `npx tsx ${path}`;
-  if (path.endsWith(".js") || path.endsWith(".mjs") || path.endsWith(".cjs")) {
-    return `node ${path}`;
-  }
-  if (path.endsWith(".sh")) return `bash ${path}`;
-  return "";
-}
-
-function summarizeEvent(event: MonitorEvent): ActivityFeedEntry | null {
-  const detail = event.file_path || stringifyPayload(event.payload);
-  switch (event.kind) {
-    case "file_open":
-      return makeActivity("Opened file", detail, event.client_at, "accent");
-    case "file_switch":
-      return makeActivity("Switched file", detail, event.client_at, "accent");
-    case "file_close":
-      return makeActivity("Closed tab", detail, event.client_at);
-    case "panel_switch":
-      return makeActivity("Changed sidebar", stringifyPayload(event.payload), event.client_at);
-    case "search_open":
-      return makeActivity("Opened search", undefined, event.client_at);
-    case "search_query":
-      return makeActivity("Searched workspace", stringifyPayload(event.payload), event.client_at);
-    case "search_result_open":
-      return makeActivity("Opened search result", detail, event.client_at, "accent");
-    case "terminal_open":
-      return makeActivity("Opened terminal", stringifyPayload(event.payload), event.client_at);
-    case "terminal_clear":
-      return makeActivity("Cleared terminal", undefined, event.client_at);
-    case "buddy_hint":
-      if (event.payload?.action === "dismissed") {
-        return makeActivity("Dismissed buddy suggestion", detail, event.client_at, "warning");
-      }
-      return makeActivity("Buddy responded", detail, event.client_at);
-    case "editor_focus":
-      return makeActivity("Focused editor", detail, event.client_at);
-    case "selection_change":
-      return makeActivity("Changed selection", stringifyPayload(event.payload), event.client_at);
-    case "edit":
-      return makeActivity("Edited file", `${detail || ""} ${stringifyPayload(event.payload)}`.trim(), event.client_at);
-    case "submit":
-      return makeActivity("Submitted assessment", detail, event.client_at, "success");
-    default:
-      return null;
-  }
-}
-
-function makeActivity(
-  label: string,
-  detail: string | undefined,
-  at: string,
-  tone: ActivityFeedEntry["tone"] = "default"
-): ActivityFeedEntry {
-  return {
-    id: `${at}-${label}-${Math.random().toString(36).slice(2, 8)}`,
-    label,
-    detail,
-    at,
-    tone,
-  };
-}
-
-function stringifyPayload(payload?: Record<string, unknown>) {
-  if (!payload) return "";
-  const parts = Object.entries(payload)
-    .filter(([, value]) => value !== undefined && value !== null && value !== "")
-    .slice(0, 4)
-    .map(([key, value]) => `${key}=${String(value)}`);
-  return parts.join(" ");
+function clampWidth(w: number) {
+  return Math.max(MIN_WIDTH, Math.min(w, MAX_WIDTH));
 }
 
 export function Workspace({
   sessionId,
   assessmentId,
-  ticket,
-  initialFiles,
-  entryPoint,
+  challenges,
   durationMinutes,
+  initialChallengeId,
+  initialResponses,
 }: WorkspaceProps) {
   const router = useRouter();
-  const initialOpenFile = entryPoint || initialFiles[0]?.path || "";
-  const langByPath = useMemo(
-    () => Object.fromEntries(initialFiles.map((f) => [f.path, f.language])),
-    [initialFiles]
-  );
 
-  const [filesContent, setFilesContent] = useState<Record<string, string>>(
-    () => Object.fromEntries(initialFiles.map((f) => [f.path, f.content]))
+  const [viewMode, setViewMode] = useState<ViewMode>("overview");
+  const [rightTab, setRightTab] = useState<RightTab>("challenges");
+  const [rightPanelState, setRightPanelState] = useState<RightPanelState>("open");
+  const [rightWidth, setRightWidth] = useState(DEFAULT_WIDTH);
+  const [isDragging, setIsDragging] = useState(false);
+
+  const [activeChallengeId, setActiveChallengeId] = useState<string | null>(
+    initialChallengeId || challenges[0]?.id || null
   );
-  const [openFile, setOpenFile] = useState<string>(initialOpenFile);
-  const [openTabs, setOpenTabs] = useState<string[]>(() =>
-    initialOpenFile ? [initialOpenFile] : []
-  );
-  const [activePanel, setActivePanel] = useState<PanelMode>("explorer");
+  const [responses, setResponses] = useState<Record<string, ChallengeResponse>>(initialResponses);
   const [submitting, setSubmitting] = useState(false);
   const [elapsed, setElapsed] = useState(0);
-  const [runOpen, setRunOpen] = useState(false);
-  const [runBusy, setRunBusy] = useState(false);
-  const [panelTab, setPanelTab] = useState<"terminal" | "activity">("terminal");
-  const [terminalInput, setTerminalInput] = useState(
-    initialOpenFile ? defaultCommandFor(initialOpenFile) : ""
-  );
-  const [terminalHistory, setTerminalHistory] = useState<TerminalEntry[]>([]);
-  const [activityFeed, setActivityFeed] = useState<ActivityFeedEntry[]>([]);
-  const [searchQuery, setSearchQuery] = useState("");
-  const deferredSearchQuery = useDeferredValue(searchQuery);
-  const [revealLine, setRevealLine] = useState<number | null>(null);
-  const [cursor, setCursor] = useState({
-    line: 1,
-    column: 1,
-    selectedChars: 0,
-    selectedLines: 0,
-  });
 
-  const saveDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const lastEditLen = useRef<Record<string, number>>({});
-  const lastCursorLogAt = useRef(0);
-  const lastSelectionKey = useRef("");
+  const [sandboxUrl, setSandboxUrl] = useState<string | null>(null);
+  const [sandboxLoading, setSandboxLoading] = useState(false);
+  const sandboxProvisioned = useRef(false);
 
-  const searchState = useMemo(() => {
-    const query = deferredSearchQuery.trim().toLowerCase();
-    if (!query) return { results: [] as SearchMatch[], totalMatches: 0 };
+  const [sqlResults, setSqlResults] = useState<Record<string, SqlResult>>({});
+  const responseDebounce = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  const dragState = useRef<{ startX: number; startWidth: number } | null>(null);
 
-    const results: SearchMatch[] = [];
-    let totalMatches = 0;
-    for (const [path, content] of Object.entries(filesContent)) {
-      if (path.toLowerCase().includes(query)) {
-        totalMatches += 1;
-        results.push({
-          path,
-          lineNumber: 1,
-          lineText: path,
-          startColumn: 1,
-        });
-      }
-      const lines = content.split("\n");
-      for (let i = 0; i < lines.length; i += 1) {
-        const lower = lines[i].toLowerCase();
-        if (!lower.includes(query)) continue;
-        totalMatches += 1;
-        if (results.length < 80) {
-          results.push({
-            path,
-            lineNumber: i + 1,
-            lineText: lines[i].trim() || "(blank line)",
-            startColumn: lower.indexOf(query) + 1,
-          });
-        }
-      }
+  const activeChallenge = challenges.find((c) => c.id === activeChallengeId) || challenges[0] || null;
+  const isCodingChallenge = activeChallenge?.kind === "coding";
+  const allChallengesComplete = challenges.every((c) => responses[c.id]?.status === "completed");
+  const completedCount = challenges.filter((c) => responses[c.id]?.status === "completed").length;
+  const submitTooltip = useMemo(() => {
+    if (submitting) {
+      return "Submitting your assessment…";
     }
-    return { results, totalMatches };
-  }, [deferredSearchQuery, filesContent]);
+    if (allChallengesComplete) {
+      return "Submit the full assessment for review.";
+    }
+    return `Submit your assessment (${completedCount}/${challenges.length} challenges marked complete). You can submit anytime.`;
+  }, [submitting, allChallengesComplete, completedCount, challenges.length]);
+  const buddyDisabled = activeChallenge ? !activeChallenge.allow_buddy : false;
 
-  const fileCanRun = openFile && canRun(openFile);
   const mm = Math.floor(elapsed / 60).toString().padStart(2, "0");
   const ss = (elapsed % 60).toString().padStart(2, "0");
   const remaining = Math.max(durationMinutes * 60 - elapsed, 0);
   const remMM = Math.floor(remaining / 60).toString().padStart(2, "0");
   const remSS = (remaining % 60).toString().padStart(2, "0");
 
-  function pushActivity(entry: ActivityFeedEntry | null) {
-    if (!entry) return;
-    setActivityFeed((prev) => [entry, ...prev].slice(0, 120));
-  }
-
-  function persistFileBestEffort(path: string, content: string) {
-    api.saveFile(sessionId, path, content).catch(() => undefined);
-  }
-
-  async function flushOpenFile() {
-    if (!openFile) return;
-    if (saveDebounce.current) clearTimeout(saveDebounce.current);
-    try {
-      await api.saveFile(sessionId, openFile, filesContent[openFile] || "");
-    } catch {
-      // Best effort only.
-    }
-  }
-
+  // ── Timer + monitor ─────────────────────────────────────────────────────────
   useEffect(() => {
     monitor.start(sessionId);
-    monitor.event("file_open", initialOpenFile, { assessment_id: assessmentId });
-    const unsubscribe = monitor.subscribe((event) => {
-      pushActivity(summarizeEvent(event));
-    });
     const startedAt = Date.now();
     const tick = setInterval(
       () => setElapsed(Math.floor((Date.now() - startedAt) / 1000)),
       1000
     );
-    return () => {
-      clearInterval(tick);
-      unsubscribe();
-      monitor.stop();
-    };
-  }, [assessmentId, initialOpenFile, sessionId]);
+    return () => { clearInterval(tick); monitor.stop(); };
+  }, [sessionId]);
 
+  // ── Drag resize ─────────────────────────────────────────────────────────────
   useEffect(() => {
-    if (!deferredSearchQuery.trim()) return;
-    const handle = setTimeout(() => {
-      monitor.event("search_query", openFile, {
-        query: deferredSearchQuery.trim(),
-        matches: searchState.totalMatches,
-      });
-    }, 250);
-    return () => clearTimeout(handle);
-  }, [deferredSearchQuery, openFile, searchState.totalMatches]);
-
-  function ensureTab(path: string) {
-    if (openTabs.includes(path)) return;
-    setOpenTabs((prev) => [...prev, path]);
-    monitor.event("file_open", path, { source: activePanel });
-  }
-
-  function switchFile(path: string, options?: { revealLine?: number; source?: string }) {
-    ensureTab(path);
-    if (path !== openFile) {
-      monitor.event("file_switch", path, {
-        from: openFile,
-        source: options?.source || "explorer",
-      });
-      setOpenFile(path);
-      setTerminalInput(defaultCommandFor(path));
+    function onMouseMove(event: MouseEvent) {
+      const drag = dragState.current;
+      if (!drag) return;
+      setRightWidth(clampWidth(drag.startWidth - (event.clientX - drag.startX)));
     }
-    if (options?.revealLine) {
-      setRevealLine(options.revealLine);
+    function onMouseUp() {
+      if (!dragState.current) return;
+      dragState.current = null;
+      setIsDragging(false);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
     }
-  }
-
-  function closeTab(path: string) {
-    if (openTabs.length === 1) return;
-    const idx = openTabs.indexOf(path);
-    if (idx < 0) return;
-    monitor.event("file_close", path);
-    const nextTabs = openTabs.filter((tab) => tab !== path);
-    setOpenTabs(nextTabs);
-    if (openFile === path) {
-      const nextActive = nextTabs[Math.max(0, idx - 1)] || nextTabs[0] || "";
-      setOpenFile(nextActive);
-      setTerminalInput(defaultCommandFor(nextActive));
-    }
-  }
-
-  function switchPanel(panel: PanelMode) {
-    if (panel === activePanel) return;
-    setActivePanel(panel);
-    monitor.event(panel === "search" ? "search_open" : "panel_switch", openFile, {
-      panel,
-    });
-  }
-
-  function editFile(path: string, content: string) {
-    const prevLen = lastEditLen.current[path] ?? content.length;
-    const delta = Math.abs(content.length - prevLen);
-    lastEditLen.current[path] = content.length;
-    monitor.edit(path, delta);
-
-    setFilesContent((prev) => ({ ...prev, [path]: content }));
-    if (saveDebounce.current) clearTimeout(saveDebounce.current);
-    saveDebounce.current = setTimeout(() => {
-      persistFileBestEffort(path, content);
-    }, 600);
-  }
-
-  function openTerminal(tab: "terminal" | "activity" = "terminal") {
-    setRunOpen(true);
-    setPanelTab(tab);
-    monitor.event("terminal_open", openFile, { tab });
-  }
-
-  function addTerminalEntry(result: CommandResult, source: "run" | "terminal") {
-    const entry: TerminalEntry = {
-      ...result,
-      id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      source,
-      at: new Date().toISOString(),
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+    return () => {
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
     };
-    setTerminalHistory((prev) => [entry, ...prev].slice(0, 40));
-    pushActivity(
-      makeActivity(
-        source === "run" ? "Executed current file" : "Ran terminal command",
-        result.command,
-        entry.at,
-        result.exit_code === 0 ? "success" : "warning"
-      )
-    );
-  }
+  }, []);
 
-  async function runFile() {
-    if (!openFile || runBusy) return;
-    await flushOpenFile();
-    openTerminal("terminal");
-    setRunBusy(true);
+  // ── Auto-commit ─────────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (viewMode !== "workspace" || !sandboxUrl) return;
+    const interval = setInterval(async () => {
+      try { await api.commitSandbox(sessionId, "chore: candidate checkpoint"); } catch {}
+    }, 60_000);
+    return () => clearInterval(interval);
+  }, [viewMode, sandboxUrl, sessionId]);
+
+  // ── Sandbox ─────────────────────────────────────────────────────────────────
+  const ensureSandbox = useCallback(async () => {
+    if (sandboxProvisioned.current) return;
+    sandboxProvisioned.current = true;
+    setSandboxLoading(true);
     try {
-      const result = await api.run(sessionId, openFile);
-      addTerminalEntry(result, "run");
-    } catch (e: any) {
-      addTerminalEntry(
-        {
-          stdout: "",
-          stderr: `Run failed: ${e.message}`,
-          exit_code: -1,
-          duration_ms: 0,
-          command: defaultCommandFor(openFile) || openFile,
-          timed_out: false,
-          unsupported: false,
-        },
-        "run"
-      );
+      const result = await api.provisionSandbox(sessionId);
+      setSandboxUrl(result.url);
+    } catch (err) {
+      console.error("sandbox provision failed:", err);
+      const base = process.env.NEXT_PUBLIC_SANDBOX_URL || "http://localhost:8080";
+      setSandboxUrl(`${base}/?folder=${encodeURIComponent(`/home/coder/sessions/${sessionId}`)}`);
     } finally {
-      setRunBusy(false);
+      setSandboxLoading(false);
     }
+  }, [sessionId]);
+
+  // ── Challenge navigation ────────────────────────────────────────────────────
+  async function selectChallenge(challengeId: string) {
+    if (challengeId === activeChallengeId) return;
+    setActiveChallengeId(challengeId);
+    const challenge = challenges.find((c) => c.id === challengeId);
+    monitor.event("challenge_switch", null, { challenge_id: challengeId, challenge_kind: challenge?.kind });
+    try { await api.setCurrentChallenge(sessionId, challengeId); } catch {}
+    if (challenge?.kind === "coding" && viewMode === "workspace") await ensureSandbox();
   }
 
-  async function executeTerminalCommand() {
-    const command = terminalInput.trim();
-    if (!command || runBusy) return;
-    await flushOpenFile();
-    openTerminal("terminal");
-    setRunBusy(true);
+  async function openChallengeWorkspace(challengeId: string) {
+    const challenge = challenges.find((c) => c.id === challengeId);
+    if (!challenge) return;
+    setActiveChallengeId(challengeId);
+    setViewMode("workspace");
+    setRightPanelState("open");
+    setRightTab("challenges");
+    monitor.event("challenge_switch", null, { challenge_id: challengeId, challenge_kind: challenge.kind });
+    try { await api.setCurrentChallenge(sessionId, challengeId); } catch {}
+    if (challenge.kind === "coding") await ensureSandbox();
+  }
+
+  // ── Response helpers ────────────────────────────────────────────────────────
+  async function persistChallengeResponse(
+    challengeId: string,
+    body: { status?: "pending" | "in_progress" | "completed"; answer_text?: string; selected_option_ids?: Record<string, string[]> }
+  ) {
     try {
-      const result = await api.terminal(sessionId, command);
-      addTerminalEntry(result, "terminal");
-    } catch (e: any) {
-      addTerminalEntry(
-        {
-          stdout: "",
-          stderr: `Command failed: ${e.message}`,
-          exit_code: -1,
-          duration_ms: 0,
-          command,
-          timed_out: false,
-          unsupported: false,
-        },
-        "terminal"
-      );
-    } finally {
-      setRunBusy(false);
-    }
+      const next = await api.saveChallengeResponse(sessionId, challengeId, body);
+      setResponses(next.challenge_responses);
+    } catch {}
   }
 
-  function clearTerminalHistory() {
-    setTerminalHistory([]);
-    monitor.event("terminal_clear", openFile);
-  }
-
-  function applyBuddyEdit(filePath: string, newContent: string, rationale: string) {
-    setFilesContent((prev) => ({ ...prev, [filePath]: newContent }));
-    persistFileBestEffort(filePath, newContent);
-    monitor.event("edit", filePath, {
-      source: "buddy_apply",
-      rationale,
-      delta_chars: newContent.length,
-    });
-    switchFile(filePath, { source: "buddy_apply" });
-  }
-
-  function dismissBuddyEdit(filePath: string, rationale: string) {
-    monitor.event("buddy_hint", filePath, {
-      action: "dismissed",
-      rationale,
-    });
-  }
-
-  function openSearchResult(result: SearchMatch) {
-    switchFile(result.path, {
-      revealLine: result.lineNumber,
-      source: "search",
-    });
-    monitor.event("search_result_open", result.path, {
-      line: result.lineNumber,
-      column: result.startColumn,
-      query: deferredSearchQuery.trim(),
-    });
-  }
-
-  function handleCursorMove(line: number, column: number) {
-    setCursor((prev) => ({ ...prev, line, column }));
-    const now = Date.now();
-    if (now - lastCursorLogAt.current < 1200) return;
-    lastCursorLogAt.current = now;
-    monitor.event("cursor_move", openFile, { line, column });
-  }
-
-  function handleSelectionChange(startLine: number, endLine: number, selectedText: string) {
-    const key = `${startLine}:${endLine}:${selectedText.length}`;
-    if (key === lastSelectionKey.current) return;
-    lastSelectionKey.current = key;
-    setCursor((prev) => ({
+  function updateChallengeStatus(challengeId: string, status: "pending" | "in_progress" | "completed") {
+    setResponses((prev) => ({
       ...prev,
-      selectedChars: selectedText.length,
-      selectedLines: Math.max(endLine - startLine + 1, selectedText ? 1 : 0),
+      [challengeId]: {
+        ...(prev[challengeId] || { challenge_id: challengeId, challenge_kind: challenges.find((c) => c.id === challengeId)?.kind || "coding", answer_text: "", selected_option_ids: {}, updated_at: new Date().toISOString() }),
+        status,
+        updated_at: new Date().toISOString(),
+      },
     }));
-    monitor.event("selection_change", openFile, {
-      start_line: startLine,
-      end_line: endLine,
-      selected_chars: selectedText.length,
-    });
+    monitor.event("challenge_response", null, { challenge_id: challengeId, status });
+    void persistChallengeResponse(challengeId, { status });
+    void api.commitSandbox(sessionId, `chore: challenge ${challengeId} marked ${status}`).catch(() => {});
   }
 
+  function updateChallengeAnswerText(challengeId: string, value: string) {
+    setResponses((prev) => ({
+      ...prev,
+      [challengeId]: {
+        ...(prev[challengeId] || { challenge_id: challengeId, challenge_kind: "theory", status: "in_progress", selected_option_ids: {}, updated_at: new Date().toISOString(), answer_text: "" }),
+        answer_text: value,
+        status: value.trim() ? "in_progress" : prev[challengeId]?.status || "pending",
+        updated_at: new Date().toISOString(),
+      },
+    }));
+    const existing = responseDebounce.current[challengeId];
+    if (existing) clearTimeout(existing);
+    responseDebounce.current[challengeId] = setTimeout(() => {
+      void persistChallengeResponse(challengeId, { answer_text: value, status: value.trim() ? "in_progress" : "pending" });
+    }, 500);
+  }
+
+  function toggleObjectiveOption(challengeId: string, question: ObjectiveQuestion, optionId: string) {
+    const current = responses[challengeId]?.selected_option_ids || {};
+    const selected = new Set(current[question.id] || []);
+    if (question.multi_select) {
+      if (selected.has(optionId)) selected.delete(optionId); else selected.add(optionId);
+    } else { selected.clear(); selected.add(optionId); }
+    const nextSelected = { ...current, [question.id]: Array.from(selected) };
+    const challenge = challenges.find((c) => c.id === challengeId);
+    const allAnswered = !!challenge?.objective_questions.every((q) => (nextSelected[q.id] || []).length > 0);
+    const nextStatus = allAnswered ? "completed" : "in_progress";
+    setResponses((prev) => ({
+      ...prev,
+      [challengeId]: {
+        ...(prev[challengeId] || { challenge_id: challengeId, challenge_kind: "objective", status: "in_progress", answer_text: "", updated_at: new Date().toISOString() }),
+        selected_option_ids: nextSelected,
+        status: nextStatus,
+        updated_at: new Date().toISOString(),
+      },
+    }));
+    void persistChallengeResponse(challengeId, { selected_option_ids: nextSelected, status: nextStatus });
+  }
+
+  // ── SQL runner ──────────────────────────────────────────────────────────────
+  async function runSQL(challengeId: string, query: string) {
+    setSqlResults((prev) => ({ ...prev, [challengeId]: { columns: [], rows: [], rowcount: 0, error: null, running: true } }));
+    try {
+      const result = await api.runSQL(sessionId, query);
+      setSqlResults((prev) => ({ ...prev, [challengeId]: { ...result, running: false } }));
+    } catch (e: any) {
+      setSqlResults((prev) => ({ ...prev, [challengeId]: { columns: [], rows: [], rowcount: 0, error: e.message, running: false } }));
+    }
+  }
+
+  // ── Submit ──────────────────────────────────────────────────────────────────
   async function submit() {
     setSubmitting(true);
-    monitor.event("submit", openFile, { assessment_id: assessmentId });
+    monitor.event("submit", null, { assessment_id: assessmentId });
     monitor.stop();
+    try { await api.commitSandbox(sessionId, "chore: final submission snapshot"); } catch {}
+    try { await api.syncSandbox(sessionId); } catch {}
     try {
       await api.submit(sessionId);
       router.push(`/results/${sessionId}`);
@@ -472,20 +295,36 @@ export function Workspace({
     }
   }
 
+  function startResize(clientX: number) {
+    dragState.current = { startX: clientX, startWidth: rightWidth };
+    setIsDragging(true);
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+  }
+
+  const panelWidth = rightPanelState === "open"
+    ? rightWidth
+    : rightPanelState === "minimized"
+      ? STRIP_WIDTH
+      : 0;
+
+  // ── Render ──────────────────────────────────────────────────────────────────
   return (
     <div className="h-screen flex flex-col bg-ink">
-      <div className="h-14 flex-shrink-0 flex items-center justify-between border-b border-black/[0.06] px-4 bg-ink-50/85 backdrop-blur-md">
+      {/* ── Header ── */}
+      <header className="h-14 flex-shrink-0 flex items-center justify-between border-b border-black/[0.06] px-4 bg-ink-50/85 backdrop-blur-md">
         <div className="flex items-center gap-4">
           <Logo />
           <div className="hidden md:flex items-center gap-2">
             <Badge tone="accent">
-              <FileCode2 className="h-3 w-3" /> Candidate Workspace
+              <Code2 className="h-3 w-3" />
+              {viewMode === "overview" ? "Assessment Overview" : "Candidate Workspace"}
             </Badge>
-            <span className="text-[11px] text-bone/40 font-mono">
-              {sessionId.slice(-8)}
-            </span>
+            <Badge>{completedCount}/{Math.max(challenges.length, 1)} done</Badge>
+            <span className="text-[11px] text-bone/40 font-mono">{sessionId.slice(-8)}</span>
           </div>
         </div>
+
         <div className="flex items-center gap-3">
           <div className="text-xs flex items-center gap-1.5 text-bone/55 font-mono">
             <Clock className="h-3.5 w-3.5" />
@@ -495,216 +334,240 @@ export function Workspace({
               {remMM}:{remSS} left
             </span>
           </div>
+
+          {viewMode === "workspace" && (
+            <Button onClick={() => setViewMode("overview")} size="sm" variant="outline">
+              <ArrowLeft className="h-4 w-4" /> All challenges
+            </Button>
+          )}
+
+          {viewMode === "workspace" && rightPanelState === "closed" && (
+            <Button
+              onClick={() => setRightPanelState("open")}
+              size="sm"
+              variant="outline"
+            >
+              <PanelRightOpen className="h-4 w-4" /> Open panel
+            </Button>
+          )}
+
+          {viewMode === "workspace" && isCodingChallenge && sandboxUrl && (
+            <a
+              href={sandboxUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-black/[0.08] bg-white px-2.5 py-1.5 text-xs text-bone/70 hover:text-bone transition"
+            >
+              <Terminal className="h-3.5 w-3.5" /> Full screen
+            </a>
+          )}
+
           <Button
-            onClick={runFile}
-            disabled={!fileCanRun || runBusy}
+            onClick={submit}
+            disabled={submitting}
             size="sm"
-            variant="outline"
-            title={fileCanRun ? `Run ${openFile}` : "Open a runnable file first"}
+            title={submitTooltip}
           >
-            {runBusy ? (
-              <>
-                <Loader2 className="h-4 w-4 animate-spin" /> Running...
-              </>
-            ) : (
-              <>
-                <Play className="h-4 w-4" /> Run
-              </>
-            )}
-          </Button>
-          <Button onClick={submit} disabled={submitting} size="sm">
-            {submitting ? (
-              <>
-                <Loader2 className="h-4 w-4 animate-spin" /> Submitting...
-              </>
-            ) : (
-              <>
-                <Send className="h-4 w-4" /> Submit
-              </>
-            )}
+            {submitting ? <><Loader2 className="h-4 w-4 animate-spin" /> Submitting…</> : <><Send className="h-4 w-4" /> Submit</>}
           </Button>
         </div>
-      </div>
+      </header>
 
-      <motion.div
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        transition={{ duration: 0.35 }}
-        className="flex-1 min-h-0 grid grid-cols-[52px_280px_minmax(0,1fr)_340px] overflow-hidden"
-      >
-        <aside className="border-r border-black/[0.06] bg-[#f3efe6] flex flex-col items-center py-3 gap-2">
-          <SidebarButton
-            active={activePanel === "explorer"}
-            title="Explorer"
-            onClick={() => switchPanel("explorer")}
-            icon={<FolderTree className="h-4 w-4" />}
+      {/* ── Body ── */}
+      {viewMode === "overview" ? (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ duration: 0.3 }}
+          className="flex-1 min-h-0 overflow-hidden"
+        >
+          <ChallengeOverview
+            challenges={challenges}
+            activeChallengeId={activeChallengeId}
+            responses={responses}
+            onOpenChallenge={openChallengeWorkspace}
           />
-          <SidebarButton
-            active={activePanel === "search"}
-            title="Search"
-            onClick={() => switchPanel("search")}
-            icon={<Search className="h-4 w-4" />}
-          />
-          <SidebarButton
-            active={activePanel === "ticket"}
-            title="Ticket"
-            onClick={() => switchPanel("ticket")}
-            icon={<Ticket className="h-4 w-4" />}
-          />
-        </aside>
+        </motion.div>
+      ) : (
+        <motion.div
+          key="workspace"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ duration: 0.25 }}
+          className="flex-1 min-h-0 flex overflow-hidden"
+        >
+          {/* ── Main content ── */}
+          <section
+            className={cn(
+              "flex-1 min-w-0 min-h-0 relative overflow-hidden",
+              isCodingChallenge
+                ? "bg-[#1e1e1e]"
+                : "bg-[radial-gradient(circle_at_top_left,_rgba(244,200,110,0.12),_transparent_30%),linear-gradient(180deg,_#fbf7ee_0%,_#f4efe3_100%)]"
+            )}
+          >
+            {isCodingChallenge ? (
+              <>
+                {sandboxLoading && (
+                  <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-4 bg-[#1e1e1e] text-white/60">
+                    <Loader2 className="h-8 w-8 animate-spin" />
+                    <p className="text-sm font-medium text-white/80">Preparing workspace</p>
+                    <p className="text-xs">Setting up your coding environment…</p>
+                  </div>
+                )}
+                {!sandboxLoading && !sandboxUrl && (
+                  <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-[#1e1e1e] text-white/50">
+                    <Code2 className="h-10 w-10 opacity-30" />
+                    <p className="text-sm">Workspace not provisioned</p>
+                    <button onClick={ensureSandbox} className="px-4 py-2 rounded-lg bg-white/10 hover:bg-white/15 text-xs text-white/70 transition">
+                      Retry
+                    </button>
+                  </div>
+                )}
+                {!sandboxLoading && sandboxUrl && (
+                  <iframe
+                    src={sandboxUrl}
+                    className="w-full h-full border-0"
+                    allow="clipboard-read; clipboard-write; fullscreen"
+                    title="VS Code Editor"
+                  />
+                )}
+              </>
+            ) : (
+              <div className="h-full flex items-center justify-center">
+                <div className="text-center space-y-2 text-bone/40">
+                  <ListChecks className="h-10 w-10 mx-auto opacity-40" />
+                  <p className="text-sm">Answer the challenge in the panel →</p>
+                </div>
+              </div>
+            )}
+          </section>
 
-        <aside className="border-r border-black/[0.06] bg-ink-50/85 min-h-0 overflow-hidden">
-          {activePanel === "explorer" && (
-            <FileTree
-              files={Object.keys(filesContent)}
-              current={openFile}
-              onSelect={(path) => switchFile(path, { source: "explorer" })}
-            />
-          )}
-          {activePanel === "search" && (
-            <SearchPanel
-              query={searchQuery}
-              results={searchState.results}
-              totalMatches={searchState.totalMatches}
-              onQueryChange={setSearchQuery}
-              onOpenResult={openSearchResult}
-            />
-          )}
-          {activePanel === "ticket" && <TicketPanel ticket={ticket} />}
-        </aside>
-
-        <section className="min-w-0 min-h-0 grid grid-rows-[auto_1fr_auto_auto] overflow-hidden">
-          <div className="border-b border-black/[0.06] bg-ink-50/80 min-w-0">
-            <div className="px-2 py-1.5 flex items-center gap-1 overflow-x-auto scrollbar-thin">
-              {openTabs.map((path) => {
-                const active = path === openFile;
-                return (
-                  <div
-                    key={path}
+          {/* ── Right panel ── */}
+          {rightPanelState !== "closed" && (
+            <aside
+              className={cn(
+                "flex-shrink-0 border-l border-black/[0.06] bg-[#f8f4ea] min-h-0 flex flex-col relative overflow-hidden",
+                !isDragging && "transition-[width] duration-200 ease-out"
+              )}
+              style={{ width: panelWidth }}
+            >
+              {rightPanelState === "minimized" ? (
+                /* ── Minimized strip ── */
+                <div className="flex flex-col items-center gap-2 pt-3 pb-3">
+                  <button
+                    onClick={() => setRightPanelState("open")}
+                    title="Expand panel"
+                    className="p-2 rounded-lg text-bone/40 hover:text-bone hover:bg-black/[0.06] transition"
+                  >
+                    <PanelRightOpen className="h-4 w-4 rotate-180" />
+                  </button>
+                  <div className="w-px h-3 bg-black/[0.08]" />
+                  <button
+                    onClick={() => { setRightPanelState("open"); setRightTab("challenges"); }}
+                    title="Challenges"
                     className={cn(
-                      "shrink-0 flex items-center gap-1 rounded-md border px-2 py-1.5 text-xs font-mono transition",
-                      active
-                        ? "bg-white text-bone border-black/[0.08]"
-                        : "text-bone/45 border-transparent hover:text-bone/80 hover:bg-black/[0.03]"
+                      "p-2 rounded-lg transition",
+                      rightTab === "challenges" ? "bg-accent/15 text-accent" : "text-bone/40 hover:text-bone hover:bg-black/[0.06]"
                     )}
                   >
-                    <button onClick={() => switchFile(path, { source: "tab" })}>
-                      {path}
+                    <ListChecks className="h-4 w-4" />
+                  </button>
+                  <button
+                    onClick={() => { setRightPanelState("open"); setRightTab("buddy"); }}
+                    title="Buddy"
+                    className={cn(
+                      "p-2 rounded-lg transition",
+                      rightTab === "buddy" ? "bg-accent/15 text-accent" : "text-bone/40 hover:text-bone hover:bg-black/[0.06]"
+                    )}
+                  >
+                    <MessageSquareText className="h-4 w-4" />
+                  </button>
+                </div>
+              ) : (
+                <>
+                  {/* ── Resize handle (left edge) ── */}
+                  <div
+                    onMouseDown={(e: ReactMouseEvent<HTMLDivElement>) => startResize(e.clientX)}
+                    className="absolute left-0 top-0 bottom-0 z-20 w-2 cursor-col-resize group"
+                  >
+                    <div className="mx-auto h-full w-px bg-black/[0.08] transition group-hover:bg-accent/50" />
+                  </div>
+
+                  {/* ── Tab bar ── */}
+                  <div className="flex-shrink-0 flex items-center gap-1 px-2 pt-2 pb-0 border-b border-black/[0.06]">
+                    <button
+                      onClick={() => setRightTab("challenges")}
+                      className={cn(
+                        "flex items-center gap-1.5 px-3 py-2 text-[11px] font-medium rounded-t-lg transition border-b-2 -mb-px",
+                        rightTab === "challenges"
+                          ? "border-accent text-accent bg-white/60"
+                          : "border-transparent text-bone/50 hover:text-bone hover:bg-black/[0.04]"
+                      )}
+                    >
+                      <ListChecks className="h-3.5 w-3.5" />
+                      Challenges
                     </button>
-                    {openTabs.length > 1 && (
+                    <button
+                      onClick={() => setRightTab("buddy")}
+                      className={cn(
+                        "flex items-center gap-1.5 px-3 py-2 text-[11px] font-medium rounded-t-lg transition border-b-2 -mb-px",
+                        rightTab === "buddy"
+                          ? "border-accent text-accent bg-white/60"
+                          : "border-transparent text-bone/50 hover:text-bone hover:bg-black/[0.04]"
+                      )}
+                    >
+                      <MessageSquareText className="h-3.5 w-3.5" />
+                      Buddy
+                    </button>
+
+                    <div className="ml-auto flex items-center gap-0.5">
                       <button
-                        onClick={() => closeTab(path)}
-                        className="text-bone/35 hover:text-bone"
-                        aria-label={`Close ${path}`}
+                        onClick={() => setRightPanelState("minimized")}
+                        title="Minimize panel"
+                        className="p-1.5 rounded-md text-bone/40 hover:text-bone hover:bg-black/[0.06] transition"
+                      >
+                        <Minus className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        onClick={() => setRightPanelState("closed")}
+                        title="Close panel"
+                        className="p-1.5 rounded-md text-bone/40 hover:text-bone hover:bg-black/[0.06] transition"
                       >
                         <X className="h-3.5 w-3.5" />
                       </button>
+                    </div>
+                  </div>
+
+                  {/* ── Panel content ── */}
+                  <div className="flex-1 min-h-0 overflow-hidden">
+                    {rightTab === "challenges" ? (
+                      <ChallengePanel
+                        challenges={challenges}
+                        activeChallengeId={activeChallengeId}
+                        responses={responses}
+                        sqlResults={sqlResults}
+                        onSelectChallenge={selectChallenge}
+                        onChangeStatus={updateChallengeStatus}
+                        onChangeAnswerText={updateChallengeAnswerText}
+                        onToggleObjectiveOption={toggleObjectiveOption}
+                        onRunSQL={runSQL}
+                      />
+                    ) : (
+                      <BuddyChat
+                        sessionId={sessionId}
+                        challengeId={activeChallenge?.id}
+                        disabled={buddyDisabled}
+                        disabledReason="Buddy is disabled for theory and objective challenges."
+                        workspace={{}}
+                      />
                     )}
                   </div>
-                );
-              })}
-            </div>
-          </div>
-
-          <div className="min-h-0 min-w-0 overflow-hidden bg-white">
-            {openFile && (
-              <CodeEditor
-                path={openFile}
-                language={langByPath[openFile] || "plaintext"}
-                value={filesContent[openFile] || ""}
-                revealLine={revealLine}
-                onChange={(v) => editFile(openFile, v)}
-                onFocus={() => monitor.event("editor_focus", openFile)}
-                onBlur={() => monitor.event("editor_blur", openFile)}
-                onCursorMove={handleCursorMove}
-                onSelectionChange={handleSelectionChange}
-              />
-            )}
-          </div>
-
-          <div className="h-8 border-t border-black/[0.06] bg-[#f6f3ea] px-3 flex items-center justify-between text-[11px] font-mono text-bone/50">
-            <div className="flex items-center gap-3 overflow-hidden">
-              <span className="truncate">{openFile || "No file open"}</span>
-              <span>{langByPath[openFile] || "plaintext"}</span>
-              {searchState.totalMatches > 0 && deferredSearchQuery.trim() && (
-                <span>
-                  {searchState.totalMatches} hits for "{deferredSearchQuery.trim()}"
-                </span>
+                </>
               )}
-            </div>
-            <div className="flex items-center gap-3">
-              <span>
-                Ln {cursor.line}, Col {cursor.column}
-              </span>
-              <span>
-                Sel {cursor.selectedChars} chars
-              </span>
-              <button
-                onClick={() => openTerminal("activity")}
-                className="text-accent hover:text-accent-deep"
-              >
-                Activity {activityFeed.length}
-              </button>
-            </div>
-          </div>
-
-          <RunPanel
-            open={runOpen}
-            busy={runBusy}
-            activeTab={panelTab}
-            terminalInput={terminalInput}
-            history={terminalHistory}
-            activity={activityFeed}
-            onTerminalInputChange={setTerminalInput}
-            onExecuteCommand={executeTerminalCommand}
-            onRunCurrentFile={runFile}
-            onClearTerminal={clearTerminalHistory}
-            onToggleTab={setPanelTab}
-            onToggle={() => {
-              if (!runOpen) openTerminal(panelTab);
-              else setRunOpen(false);
-            }}
-            onClose={() => setRunOpen(false)}
-          />
-        </section>
-
-        <aside className="min-w-0 border-l border-black/[0.06] bg-ink-50/80 min-h-0 overflow-hidden">
-          <BuddyChat
-            sessionId={sessionId}
-            openFile={openFile}
-            workspace={filesContent}
-            onApplyEdit={applyBuddyEdit}
-            onDismissEdit={dismissBuddyEdit}
-          />
-        </aside>
-      </motion.div>
-    </div>
-  );
-}
-
-function SidebarButton({
-  active,
-  title,
-  icon,
-  onClick,
-}: {
-  active: boolean;
-  title: string;
-  icon: ReactNode;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      title={title}
-      className={cn(
-        "h-10 w-10 rounded-xl grid place-items-center transition border",
-        active
-          ? "bg-white text-accent border-accent/25 shadow-soft"
-          : "text-bone/45 border-transparent hover:text-bone hover:bg-white/70"
+            </aside>
+          )}
+        </motion.div>
       )}
-    >
-      {icon}
-    </button>
+    </div>
   );
 }

@@ -1,0 +1,296 @@
+#!/usr/bin/env python3
+"""
+GenEx sandbox sync server.
+
+Runs inside the code-server container on port 8081.
+The GenEx backend (running anywhere) calls this API to:
+  - Write session files    PUT  /sync/{session_id}
+  - Read session files     GET  /sync/{session_id}
+  - Delete session         DELETE /sync/{session_id}
+  - Git commit snapshot    POST /commit/{session_id}
+  - Git diff               GET  /diff/{session_id}
+  - Run SQL query          POST /sql/{session_id}
+"""
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import sqlite3
+import subprocess
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
+
+SESSIONS_ROOT = Path(os.getenv("SESSIONS_ROOT", "/home/coder/sessions"))
+SKIP_DIRS = {".git", "__pycache__", "node_modules", ".idea", ".venv"}
+SKIP_FILES = {".DS_Store", "Thumbs.db"}
+
+GIT_ENV = {
+    **os.environ,
+    "GIT_AUTHOR_NAME": "Candidate",
+    "GIT_AUTHOR_EMAIL": "candidate@genex.dev",
+    "GIT_COMMITTER_NAME": "GenEx",
+    "GIT_COMMITTER_EMAIL": "system@genex.dev",
+}
+
+VSCODE_SETTINGS = {
+    "files.autoSave": "afterDelay",
+    "files.autoSaveDelay": 2000,
+    "editor.fontSize": 14,
+    "editor.minimap.enabled": False,
+    "git.enableSmartCommit": True,
+    "workbench.startupEditor": "none",
+    "window.restoreWindows": "none",
+}
+
+WORKSPACE_TEMPLATE = {
+    "folders": [{"path": "."}],
+    "settings": {
+        "workbench.startupEditor": "none",
+        "files.autoSave": "afterDelay",
+        "files.autoSaveDelay": 2000,
+        "window.restoreWindows": "none",
+    },
+}
+
+
+# ── Helpers ────────────────────────────────────────────────────────────────────
+
+def _should_skip(rel: Path) -> bool:
+    return any(p in SKIP_DIRS or p in SKIP_FILES for p in rel.parts)
+
+
+def _git(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["git"] + args, cwd=cwd, capture_output=True, text=True,
+        env=GIT_ENV, timeout=10,
+    )
+
+
+def _write_files(session_dir: Path, files: dict[str, str]) -> None:
+    session_dir.mkdir(parents=True, exist_ok=True)
+
+    for rel_path, content in files.items():
+        fp = session_dir / rel_path.lstrip("/")
+        fp.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            fp.write_text(content, encoding="utf-8")
+        except Exception as exc:
+            print(f"[sync] write error {rel_path}: {exc}")
+
+    # .vscode/settings.json
+    vscode_dir = session_dir / ".vscode"
+    vscode_dir.mkdir(exist_ok=True)
+    settings_path = vscode_dir / "settings.json"
+    if not settings_path.exists():
+        settings_path.write_text(json.dumps(VSCODE_SETTINGS, indent=2))
+
+    # .genex.code-workspace (locks VS Code to this folder)
+    ws_file = session_dir / ".genex.code-workspace"
+    if not ws_file.exists():
+        ws_file.write_text(json.dumps(WORKSPACE_TEMPLATE, indent=2))
+
+    # SQLite db from schema.sql if present
+    schema = files.get("schema.sql") or files.get("setup.sql") or files.get("init.sql")
+    if schema:
+        db_path = session_dir / "database.db"
+        if not db_path.exists():
+            try:
+                conn = sqlite3.connect(str(db_path))
+                conn.executescript(schema)
+                conn.commit()
+                conn.close()
+                print(f"[sync] SQLite database initialized for {session_dir.name}")
+            except sqlite3.Error as exc:
+                print(f"[sync] SQL init error: {exc}")
+
+    # Git init + initial commit
+    if not (session_dir / ".git").exists():
+        _git(["init", "--initial-branch=main"], session_dir)
+        _git(["add", "-A"], session_dir)
+        _git(["commit", "-m", "chore: initial assessment state", "--allow-empty"], session_dir)
+        print(f"[sync] git repo initialized for {session_dir.name}")
+
+
+def _read_files(session_dir: Path) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for fp in session_dir.rglob("*"):
+        if not fp.is_file():
+            continue
+        rel = fp.relative_to(session_dir)
+        if _should_skip(rel):
+            continue
+        try:
+            result[str(rel)] = fp.read_text(encoding="utf-8")
+        except Exception:
+            pass
+    return result
+
+
+def _commit_snapshot(session_dir: Path, message: str) -> bool:
+    status = _git(["status", "--porcelain"], session_dir)
+    if not status.stdout.strip():
+        return False
+    _git(["add", "-A"], session_dir)
+    result = _git(["commit", "-m", message], session_dir)
+    return result.returncode == 0
+
+
+def _get_diff(session_dir: Path) -> tuple[str, str]:
+    try:
+        _git(["add", "-A"], session_dir)
+        first = _git(["rev-list", "--max-parents=0", "HEAD"], session_dir).stdout.strip()
+        if not first:
+            _git(["reset", "HEAD"], session_dir)
+            return "", "(no commits)"
+        diff_out = _git(["diff", "--cached", first], session_dir).stdout[:40_000]
+        stat_out = _git(["diff", "--stat", "--cached", first], session_dir).stdout
+        _git(["reset", "HEAD"], session_dir)
+        return diff_out, stat_out or "(no changes)"
+    except Exception as exc:
+        return "", f"(diff unavailable: {exc})"
+
+
+def _run_sql(session_dir: Path, query: str) -> dict:
+    db_path = session_dir / "database.db"
+    if not db_path.exists():
+        sqlite3.connect(str(db_path)).close()
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    try:
+        cur = conn.execute(query.strip())
+        conn.commit()
+        if cur.description:
+            cols = [d[0] for d in cur.description]
+            rows = [dict(r) for r in cur.fetchmany(500)]
+            return {"columns": cols, "rows": rows, "rowcount": len(rows), "error": None}
+        return {"columns": [], "rows": [], "rowcount": cur.rowcount, "error": None}
+    except sqlite3.Error as exc:
+        return {"columns": [], "rows": [], "rowcount": 0, "error": str(exc)}
+    finally:
+        conn.close()
+
+
+# ── HTTP handler ───────────────────────────────────────────────────────────────
+
+class Handler(BaseHTTPRequestHandler):
+    def _body(self) -> dict:
+        length = int(self.headers.get("Content-Length", 0))
+        if length == 0:
+            return {}
+        return json.loads(self.rfile.read(length))
+
+    def _ok(self, data: dict) -> None:
+        body = json.dumps(data).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _err(self, code: int, msg: str) -> None:
+        body = json.dumps({"error": msg}).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _parts(self) -> list[str]:
+        return self.path.strip("/").split("/", 2)
+
+    # PUT /sync/{session_id}
+    def do_PUT(self) -> None:
+        parts = self._parts()
+        if len(parts) < 2 or parts[0] != "sync":
+            self._err(400, "bad path"); return
+        session_id = parts[1]
+        body = self._body()
+        files = body.get("files", {})
+        sd = SESSIONS_ROOT / session_id
+        try:
+            _write_files(sd, files)
+            print(f"[sync] provisioned {len(files)} files for {session_id}")
+            self._ok({"ok": True, "count": len(files), "session_id": session_id})
+        except Exception as exc:
+            self._err(500, str(exc))
+
+    # GET /sync/{session_id}   or   GET /diff/{session_id}   or   GET /health
+    def do_GET(self) -> None:
+        parts = self._parts()
+        if parts and parts[0] == "health":
+            self._ok({"status": "ok", "sessions": len(list(SESSIONS_ROOT.iterdir())) if SESSIONS_ROOT.exists() else 0})
+            return
+        if len(parts) < 2:
+            self._err(400, "bad path"); return
+        op, session_id = parts[0], parts[1]
+        sd = SESSIONS_ROOT / session_id
+
+        if op == "sync":
+            if not sd.exists():
+                self._err(404, "session not found"); return
+            self._ok({"files": _read_files(sd), "session_id": session_id})
+
+        elif op == "diff":
+            if not sd.exists():
+                self._err(404, "session not found"); return
+            full, stat = _get_diff(sd)
+            self._ok({"diff": full, "stat": stat})
+
+        elif op == "health":
+            self._ok({"status": "ok", "sessions": len(list(SESSIONS_ROOT.iterdir())) if SESSIONS_ROOT.exists() else 0})
+
+        else:
+            self._err(404, "not found")
+
+    # POST /commit/{session_id}   or   POST /sql/{session_id}
+    def do_POST(self) -> None:
+        parts = self._parts()
+        if len(parts) < 2:
+            self._err(400, "bad path"); return
+        op, session_id = parts[0], parts[1]
+        sd = SESSIONS_ROOT / session_id
+        body = self._body()
+
+        if op == "commit":
+            if not sd.exists():
+                self._err(404, "session not found"); return
+            msg = body.get("message", "chore: candidate checkpoint")
+            committed = _commit_snapshot(sd, msg)
+            self._ok({"committed": committed, "session_id": session_id})
+
+        elif op == "sql":
+            if not sd.exists():
+                self._err(404, "session not found"); return
+            query = body.get("query", "")
+            if not query.strip():
+                self._err(400, "empty query"); return
+            self._ok(_run_sql(sd, query))
+
+        else:
+            self._err(404, "not found")
+
+    # DELETE /sync/{session_id}
+    def do_DELETE(self) -> None:
+        parts = self._parts()
+        if len(parts) < 2 or parts[0] != "sync":
+            self._err(400, "bad path"); return
+        session_id = parts[1]
+        sd = SESSIONS_ROOT / session_id
+        if sd.exists():
+            shutil.rmtree(str(sd), ignore_errors=True)
+        self._ok({"destroyed": True, "session_id": session_id})
+
+    def log_message(self, fmt: str, *args) -> None:
+        print(f"[sync] {self.address_string()} - {fmt % args}")
+
+
+# ── Main ───────────────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    SESSIONS_ROOT.mkdir(parents=True, exist_ok=True)
+    port = int(os.getenv("SYNC_PORT", "8081"))
+    server = HTTPServer(("0.0.0.0", port), Handler)
+    print(f"[sync] GenEx sandbox sync server on :{port}")
+    print(f"[sync] sessions root: {SESSIONS_ROOT}")
+    server.serve_forever()

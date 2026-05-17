@@ -1,0 +1,14 @@
+[
+  { "key": "ctrl+k ctrl+o",   "command": "-workbench.action.files.openFolder" },
+  { "key": "ctrl+r",          "command": "-workbench.action.openRecent" },
+  { "key": "ctrl+shift+n",    "command": "-workbench.action.newWindow" },
+  { "key": "ctrl+shift+w",    "command": "-workbench.action.closeWindow" },
+
+  { "key": "ctrl+shift+x",    "command": "-workbench.view.extensions" },
+  { "key": "ctrl+,",          "command": "-workbench.action.openSettings" },
+  { "key": "ctrl+shift+,",    "command": "-workbench.action.openSettings" },
+
+  { "key": "ctrl+shift+i",    "command": "-workbench.panel.chat.view.copilot.focus" },
+  { "key": "ctrl+alt+i",      "command": "-github.copilot.interactiveEditor.explain" },
+  { "key": "ctrl+i",          "command": "-inlineChat.start" }
+]

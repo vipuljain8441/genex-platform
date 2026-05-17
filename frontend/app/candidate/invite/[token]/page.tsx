@@ -77,8 +77,8 @@ export default function InvitePage() {
                 </h1>
                 <p className="mt-2 text-sm text-bone/55">
                   Hi <span className="text-bone">{view.candidate_email}</span> — when you
-                  click start, we'll drop you into a real codebase with a Jira-style ticket
-                  and a Buddy AI on call.
+                  click start, we'll drop you into a real codebase with a multi-step
+                  assessment flow: coding tasks, reasoning prompts, and a Buddy AI on call.
                 </p>
               </CardHeader>
 

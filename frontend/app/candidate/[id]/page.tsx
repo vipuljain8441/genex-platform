@@ -18,10 +18,10 @@ export default function CandidateWorkspacePage() {
   if (!data) return <div className="p-10 text-bone/40">Loading workspace…</div>;
 
   const a = data.assessment;
-  const ticket = a.candidate_ticket;
+  const challenges = a.candidate_challenges || [];
   const buggy = a.buggy_codebase;
 
-  if (!ticket || !buggy) {
+  if (!buggy || challenges.length === 0) {
     return (
       <div className="p-10 text-bone/40">Assessment not fully ready yet.</div>
     );
@@ -38,10 +38,12 @@ export default function CandidateWorkspacePage() {
     <Workspace
       sessionId={data.session.id}
       assessmentId={a.id}
-      ticket={ticket}
+      challenges={challenges}
       initialFiles={files}
       entryPoint={buggy.entry_point}
       durationMinutes={a.job.duration_minutes}
+      initialChallengeId={data.session.current_challenge_id}
+      initialResponses={data.session.challenge_responses || {}}
     />
   );
 }
