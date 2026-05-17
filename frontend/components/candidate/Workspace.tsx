@@ -69,7 +69,7 @@ const MAX_WIDTH = 560;
 const DEFAULT_WIDTH = 380;
 const MIN_SECTION_HEIGHT = 180;
 const MINIMIZED_SECTION_HEIGHT = 58;
-const DEFAULT_CHALLENGE_SECTION_HEIGHT = 360;
+const DEFAULT_CHALLENGE_SECTION_HEIGHT = 480;
 const PANEL_PEEK_WIDTH = 56;
 const FEEDBACK_OPTIONS: { value: FeedbackCategory; label: string; hint: string }[] = [
   { value: "general", label: "General", hint: "Anything that would help the employer understand the session." },
@@ -526,8 +526,9 @@ export function Workspace({
 
   const panelOpen = challengePanelState !== "closed" || buddyPanelState !== "closed";
   const panelWidth = panelOpen ? rightWidth : 0;
-  const sectionCardWidth = Math.max(Math.min(rightWidth - 88, 420), 240);
   const panelSlideX = panelOpen && panelSlidOut ? Math.max(panelWidth - PANEL_PEEK_WIDTH, 0) : 0;
+  const bothExpanded =
+    challengePanelState === "expanded" && buddyPanelState === "expanded";
 
   // ── Render ──────────────────────────────────────────────────────────────────
   return (
@@ -755,7 +756,7 @@ export function Workspace({
 
               <div
                 className={cn(
-                  "ml-14 transition-opacity duration-200",
+                  "ml-14 h-full flex flex-col min-h-0 transition-opacity duration-200",
                   panelSlidOut && "pointer-events-none opacity-0"
                 )}
               >
@@ -767,22 +768,27 @@ export function Workspace({
                   Challenges and Buddy
                 </div>
                 <div className="mt-1 text-[11px] leading-relaxed text-bone/50">
-                  Resize the panel horizontally, then scroll left or right inside this side panel.
+                  Resize the panel horizontally. Drag the divider between sections to adjust their heights.
                 </div>
               </div>
 
               <div
-                className="flex-1 min-h-0 overflow-x-auto overflow-y-hidden scrollbar-thin p-3"
+                ref={sectionContainerRef}
+                className="flex-1 min-h-0 overflow-hidden p-3"
               >
-                <div className="flex h-full min-w-full gap-3 pr-3 snap-x snap-mandatory">
+                <div className="flex h-full w-full flex-col gap-2 min-h-0">
                 {challengePanelState !== "closed" && (
                   <section
-                    className="min-h-0 h-full flex-none overflow-hidden rounded-[22px] border border-[#dcc9a8]/85 bg-[linear-gradient(180deg,_rgba(255,255,255,0.94)_0%,_rgba(252,246,236,0.94)_100%)] shadow-[0_14px_28px_rgba(68,50,22,0.08)] flex flex-col snap-start"
-                    style={{
-                      width: challengePanelState === "minimized" ? 108 : sectionCardWidth,
-                    }}
+                    className="w-full overflow-hidden rounded-[22px] border border-[#dcc9a8]/85 bg-[linear-gradient(180deg,_rgba(255,255,255,0.94)_0%,_rgba(252,246,236,0.94)_100%)] shadow-[0_14px_28px_rgba(68,50,22,0.08)] flex flex-col"
+                    style={
+                      challengePanelState === "minimized"
+                        ? { height: MINIMIZED_SECTION_HEIGHT, flex: "0 0 auto" }
+                        : bothExpanded
+                          ? { height: challengePanelHeight, flex: "0 0 auto", minHeight: MIN_SECTION_HEIGHT }
+                          : { flex: "1 1 0%", minHeight: 0 }
+                    }
                   >
-                    <div className="flex items-center gap-3 border-b border-black/[0.06] bg-[#fffaf0] px-3 py-2">
+                    <div className="flex flex-shrink-0 items-center gap-3 border-b border-black/[0.06] bg-[#fffaf0] px-3 py-2">
                       <div className="grid h-8 w-8 place-items-center rounded-xl bg-accent/12 text-accent">
                         <ListChecks className="h-4 w-4" />
                       </div>
@@ -827,14 +833,29 @@ export function Workspace({
                   </section>
                 )}
 
+                {bothExpanded && (
+                  <div
+                    onMouseDown={(e: ReactMouseEvent<HTMLDivElement>) => startSectionResize(e.clientY)}
+                    onDoubleClick={() => setChallengePanelHeight(DEFAULT_CHALLENGE_SECTION_HEIGHT)}
+                    className="group relative -my-1 h-3 flex-shrink-0 cursor-row-resize"
+                    title="Drag to resize sections"
+                  >
+                    <div className="absolute left-1/2 top-1/2 flex h-3 w-24 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-white/92 shadow-sm ring-1 ring-black/[0.06] transition group-hover:bg-white group-hover:ring-accent/25">
+                      <div className="h-1 w-10 rounded-full bg-black/[0.12] transition group-hover:bg-accent/45" />
+                    </div>
+                  </div>
+                )}
+
                 {buddyPanelState !== "closed" && (
                   <section
-                    className="min-h-0 h-full flex-none overflow-hidden rounded-[22px] border border-[#c8daf0]/85 bg-[linear-gradient(180deg,_rgba(251,254,255,0.95)_0%,_rgba(240,247,255,0.94)_100%)] shadow-[0_14px_28px_rgba(35,72,117,0.08)] flex flex-col snap-start"
-                    style={{
-                      width: buddyPanelState === "minimized" ? 108 : sectionCardWidth,
-                    }}
+                    className="w-full overflow-hidden rounded-[22px] border border-[#c8daf0]/85 bg-[linear-gradient(180deg,_rgba(251,254,255,0.95)_0%,_rgba(240,247,255,0.94)_100%)] shadow-[0_14px_28px_rgba(35,72,117,0.08)] flex flex-col"
+                    style={
+                      buddyPanelState === "minimized"
+                        ? { height: MINIMIZED_SECTION_HEIGHT, flex: "0 0 auto" }
+                        : { flex: "1 1 0%", minHeight: bothExpanded ? MIN_SECTION_HEIGHT : 0 }
+                    }
                   >
-                    <div className="flex items-center gap-3 border-b border-[#c8daf0]/80 bg-[linear-gradient(180deg,_rgba(255,255,255,0.92)_0%,_rgba(241,248,255,0.84)_100%)] px-3 py-2">
+                    <div className="flex flex-shrink-0 items-center gap-3 border-b border-[#c8daf0]/80 bg-[linear-gradient(180deg,_rgba(255,255,255,0.92)_0%,_rgba(241,248,255,0.84)_100%)] px-3 py-2">
                       <div className="grid h-8 w-8 place-items-center rounded-xl bg-[#1f7ae0]/10 text-[#1f7ae0]">
                         <MessageSquareText className="h-4 w-4" />
                       </div>

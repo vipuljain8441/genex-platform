@@ -249,6 +249,7 @@ class CandidateChallenge(BaseModel):
     related_files: list[str] = Field(default_factory=list)
     workspace_enabled: bool = False
     allow_buddy: bool = False
+    buddy_mode: Literal["STRICT", "MODERATE", "GUIDED"] = "MODERATE"
     objective_questions: list[ObjectiveQuestion] = Field(default_factory=list)
     expected_response_format: str = ""
     editor_language: str = ""
@@ -437,6 +438,10 @@ class BuddyRequest(BaseModel):
     # produce real edits. The server-side store also has this, but the client's
     # in-memory copy may be newer if there are unsaved edits.
     workspace: dict[str, str] = Field(default_factory=dict)
+    # Hint-ladder mode. The route overrides this from the active challenge's
+    # buddy_mode if set; clients may pass it as a hint but the server is
+    # authoritative.
+    mode: Literal["STRICT", "MODERATE", "GUIDED"] | None = None
 
 
 class BuddyEdit(BaseModel):
