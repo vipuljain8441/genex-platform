@@ -12,6 +12,7 @@ from app.models.schemas import (
     ActivityEvent,
     Assessment,
     BuddyTurn,
+    CandidateFeedback,
     CandidateSession,
     EvaluationResult,
     Invite,
@@ -22,6 +23,8 @@ class MemoryStore:
     def __init__(self) -> None:
         self.assessments: dict[str, Assessment] = {}
         self.sessions: dict[str, CandidateSession] = {}
+        self.feedback_by_session: dict[str, list[CandidateFeedback]] = defaultdict(list)
+        self.feedback_by_assessment: dict[str, list[CandidateFeedback]] = defaultdict(list)
         self.events: dict[str, list[ActivityEvent]] = defaultdict(list)
         self.buddy_history: dict[str, list[BuddyTurn]] = defaultdict(list)
         self.evaluations: dict[str, EvaluationResult] = {}
@@ -60,6 +63,17 @@ class MemoryStore:
             session for session in self.sessions.values()
             if session.assessment_id == assessment_id
         ]
+
+    # ── Feedback ──────────────────────────────────────────────────────────
+    async def append_feedback(self, feedback: CandidateFeedback) -> None:
+        self.feedback_by_session[feedback.session_id].append(feedback)
+        self.feedback_by_assessment[feedback.assessment_id].append(feedback)
+
+    async def list_feedback_for_session(self, session_id: str) -> list[CandidateFeedback]:
+        return list(self.feedback_by_session.get(session_id, []))
+
+    async def list_feedback_for_assessment(self, assessment_id: str) -> list[CandidateFeedback]:
+        return list(self.feedback_by_assessment.get(assessment_id, []))
 
     # ── Events ────────────────────────────────────────────────────────────
     async def append_event(self, event: ActivityEvent) -> None:

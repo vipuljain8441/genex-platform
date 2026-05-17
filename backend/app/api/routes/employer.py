@@ -209,6 +209,20 @@ class CandidateSessionSummaryOut(BaseModel):
     report_url: str
 
 
+class AssessmentFeedbackSummaryOut(BaseModel):
+    id: str
+    session_id: str
+    candidate_name: str
+    challenge_id: str | None
+    category: str
+    message: str
+    status: str
+    created_at: str
+    submitted_at: str | None
+    has_evaluation: bool
+    report_url: str
+
+
 class GitHubValidateIn(BaseModel):
     repo_url: str
 
@@ -290,6 +304,38 @@ async def list_assessment_sessions(assessment_id: str) -> list[CandidateSessionS
                 current_challenge_id=session.current_challenge_id,
                 has_evaluation=evaluation is not None,
                 report_url=f"/results/{session.id}",
+            )
+        )
+    return out
+
+
+@router.get("/assessments/{assessment_id}/feedback", response_model=list[AssessmentFeedbackSummaryOut])
+async def list_assessment_feedback(assessment_id: str) -> list[AssessmentFeedbackSummaryOut]:
+    assessment = await store.get_assessment(assessment_id)
+    if not assessment:
+        raise HTTPException(404, "assessment not found")
+    feedback_items = await store.list_feedback_for_assessment(assessment_id)
+    sessions = {
+        session.id: session
+        for session in await store.list_sessions_for_assessment(assessment_id)
+    }
+    out: list[AssessmentFeedbackSummaryOut] = []
+    for feedback in feedback_items:
+        session = sessions.get(feedback.session_id)
+        evaluation = await store.get_evaluation(feedback.session_id)
+        out.append(
+            AssessmentFeedbackSummaryOut(
+                id=feedback.id,
+                session_id=feedback.session_id,
+                candidate_name=feedback.candidate_name,
+                challenge_id=feedback.challenge_id,
+                category=feedback.category.value,
+                message=feedback.message,
+                status=feedback.status,
+                created_at=feedback.created_at.isoformat(),
+                submitted_at=session.submitted_at.isoformat() if session and session.submitted_at else None,
+                has_evaluation=evaluation is not None,
+                report_url=f"/results/{feedback.session_id}",
             )
         )
     return out

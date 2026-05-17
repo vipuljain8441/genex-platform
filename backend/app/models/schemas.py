@@ -63,6 +63,17 @@ class ChallengeKind(str, Enum):
     THEORY = "theory"
 
 
+class FeedbackCategory(str, Enum):
+    GENERAL = "general"
+    CHALLENGE = "challenge"
+    WORKSPACE = "workspace"
+    BUDDY = "buddy"
+    BUG = "bug"
+    PERFORMANCE = "performance"
+    CLARITY = "clarity"
+    OTHER = "other"
+
+
 # ── Phase 1: Employer intake ──────────────────────────────────────────────────
 
 class RecruiterContext(BaseModel):
@@ -329,6 +340,18 @@ class ChallengeResponse(BaseModel):
     updated_at: datetime = Field(default_factory=_now)
 
 
+class CandidateFeedback(BaseModel):
+    id: str = Field(default_factory=lambda: _id("FDB"))
+    assessment_id: str
+    session_id: str
+    candidate_name: str = "Candidate"
+    challenge_id: str | None = None
+    category: FeedbackCategory = FeedbackCategory.GENERAL
+    message: str
+    status: Literal["open", "reviewed", "resolved"] = "open"
+    created_at: datetime = Field(default_factory=_now)
+
+
 class EventKind(str, Enum):
     EDIT = "edit"
     FILE_OPEN = "file_open"
@@ -352,6 +375,7 @@ class EventKind(str, Enum):
     BUDDY_QUERY = "buddy_query"
     BUDDY_HINT = "buddy_hint"
     BUDDY_EDIT_ACTION = "buddy_edit_action"
+    FEEDBACK_SUBMIT = "feedback_submit"
     IDLE = "idle"
     SUBMIT = "submit"
     # Behavioural tracking (see services/behaviour.py).

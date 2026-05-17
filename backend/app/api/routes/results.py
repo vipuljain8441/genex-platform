@@ -38,6 +38,7 @@ async def get_report(session_id: str) -> ReportData:
         raise HTTPException(404, "assessment not found")
     events = await store.get_events(session_id)
     buddy_history = await store.get_buddy_history(session_id)
+    feedback = await store.list_feedback_for_session(session_id)
     evaluation = await store.get_evaluation(session_id)
     heatmap = build_heatmap(events)
     return build_report(
@@ -45,6 +46,7 @@ async def get_report(session_id: str) -> ReportData:
         assessment=assessment,
         events=events,
         buddy_history=buddy_history,
+        feedback=feedback,
         evaluation=evaluation,
         heatmap=heatmap,
     )

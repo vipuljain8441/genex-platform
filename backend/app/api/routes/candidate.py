@@ -17,9 +17,11 @@ from app.agents import evaluator
 from app.models.schemas import (
     ActivityEvent,
     Assessment,
+    CandidateFeedback,
     CandidateSession,
     ChallengeResponse,
     EventKind,
+    FeedbackCategory,
 )
 from app.store import store
 
@@ -124,6 +126,12 @@ class CurrentChallengeIn(BaseModel):
     challenge_id: str
 
 
+class FeedbackIn(BaseModel):
+    category: FeedbackCategory = FeedbackCategory.GENERAL
+    message: str
+    challenge_id: str | None = None
+
+
 @router.put("/sessions/{session_id}/current-challenge", response_model=CandidateSession)
 async def set_current_challenge(session_id: str, body: CurrentChallengeIn) -> CandidateSession:
     session = await store.get_session(session_id)
@@ -185,6 +193,45 @@ async def save_challenge_response(
         },
     ))
     return session
+
+
+@router.post("/sessions/{session_id}/feedback", response_model=CandidateFeedback)
+async def submit_feedback(session_id: str, body: FeedbackIn) -> CandidateFeedback:
+    session = await store.get_session(session_id)
+    if not session:
+        raise HTTPException(404, "session not found")
+    assessment = await store.get_assessment(session.assessment_id)
+    if not assessment:
+        raise HTTPException(500, "assessment missing")
+
+    message = body.message.strip()
+    if len(message) < 8:
+        raise HTTPException(400, "feedback message is too short")
+
+    challenge_id = body.challenge_id or session.current_challenge_id
+    if challenge_id and challenge_id not in {challenge.id for challenge in assessment.candidate_challenges}:
+        raise HTTPException(404, "challenge not found")
+
+    feedback = CandidateFeedback(
+        assessment_id=session.assessment_id,
+        session_id=session.id,
+        candidate_name=session.candidate_name,
+        challenge_id=challenge_id,
+        category=body.category,
+        message=message,
+    )
+    await store.append_feedback(feedback)
+    await store.append_event(ActivityEvent(
+        session_id=session.id,
+        kind=EventKind.FEEDBACK_SUBMIT,
+        payload={
+            "feedback_id": feedback.id,
+            "category": feedback.category.value,
+            "challenge_id": challenge_id,
+            "message_length": len(message),
+        },
+    ))
+    return feedback
 
 
 class SubmitOut(BaseModel):

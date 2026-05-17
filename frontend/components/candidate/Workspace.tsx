@@ -12,6 +12,7 @@ import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import {
   ArrowLeft,
+  Flag,
   ChevronLeft,
   ChevronRight,
   Clock,
@@ -22,13 +23,13 @@ import {
   MessageSquareText,
   Minus,
   Send,
-  Terminal,
   X,
 } from "lucide-react";
 import {
   api,
   type CandidateChallenge,
   type ChallengeResponse,
+  type FeedbackCategory,
   type ObjectiveQuestion,
 } from "@/lib/api";
 import { behaviourTracker } from "@/lib/behaviour-tracker";
@@ -70,6 +71,16 @@ const MIN_SECTION_HEIGHT = 180;
 const MINIMIZED_SECTION_HEIGHT = 58;
 const DEFAULT_CHALLENGE_SECTION_HEIGHT = 360;
 const PANEL_PEEK_WIDTH = 56;
+const FEEDBACK_OPTIONS: { value: FeedbackCategory; label: string; hint: string }[] = [
+  { value: "general", label: "General", hint: "Anything that would help the employer understand the session." },
+  { value: "challenge", label: "Challenge", hint: "Problem statement, scope, or expectation was unclear." },
+  { value: "workspace", label: "Workspace", hint: "Editor, files, terminal, or sandbox issue." },
+  { value: "buddy", label: "Buddy", hint: "AI assistant response quality or behavior issue." },
+  { value: "bug", label: "Bug", hint: "Assessment flow or product bug." },
+  { value: "performance", label: "Performance", hint: "Latency, freezing, or slow interactions." },
+  { value: "clarity", label: "Clarity", hint: "Instructions, labels, or UX confusion." },
+  { value: "other", label: "Other", hint: "Something else worth sharing." },
+];
 
 function clampWidth(w: number) {
   return Math.max(MIN_WIDTH, Math.min(w, MAX_WIDTH));
@@ -93,6 +104,11 @@ export function Workspace({
   const [panelSlidOut, setPanelSlidOut] = useState(false);
   const [isSidebarDragging, setIsSidebarDragging] = useState(false);
   const [isSectionDragging, setIsSectionDragging] = useState(false);
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
+  const [feedbackCategory, setFeedbackCategory] = useState<FeedbackCategory>("general");
+  const [feedbackMessage, setFeedbackMessage] = useState("");
+  const [feedbackSubmitting, setFeedbackSubmitting] = useState(false);
+  const [feedbackNotice, setFeedbackNotice] = useState<string | null>(null);
 
   const [activeChallengeId, setActiveChallengeId] = useState<string | null>(
     initialChallengeId || challenges[0]?.id || null
@@ -382,6 +398,39 @@ export function Workspace({
     }
   }
 
+  async function submitFeedback() {
+    const message = feedbackMessage.trim();
+    if (message.length < 8) {
+      setFeedbackNotice("Please share a little more detail so the employer can understand the issue.");
+      return;
+    }
+    setFeedbackSubmitting(true);
+    setFeedbackNotice(null);
+    try {
+      await api.submitFeedback(sessionId, {
+        category: feedbackCategory,
+        message,
+        challenge_id: activeChallenge?.id || null,
+      });
+      monitor.event("feedback_submit", null, {
+        category: feedbackCategory,
+        challenge_id: activeChallenge?.id,
+        message_length: message.length,
+      });
+      setFeedbackMessage("");
+      setFeedbackCategory("general");
+      setFeedbackNotice("Feedback shared with the employer.");
+      window.setTimeout(() => {
+        setFeedbackOpen(false);
+        setFeedbackNotice(null);
+      }, 900);
+    } catch (e: any) {
+      setFeedbackNotice(e?.message || "Could not submit feedback right now.");
+    } finally {
+      setFeedbackSubmitting(false);
+    }
+  }
+
   function startResize(clientX: number) {
     sidebarDragState.current = { startX: clientX, startWidth: rightWidth };
     setIsSidebarDragging(true);
@@ -483,16 +532,16 @@ export function Workspace({
             </Button>
           )}
 
-          {viewMode === "workspace" && isCodingChallenge && sandboxUrl && (
-            <a
-              href={sandboxUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex items-center gap-1.5 rounded-lg border border-black/[0.08] bg-white px-2.5 py-1.5 text-xs text-bone/70 hover:text-bone transition"
-            >
-              <Terminal className="h-3.5 w-3.5" /> Full screen
-            </a>
-          )}
+          <Button
+            onClick={() => {
+              setFeedbackOpen(true);
+              setFeedbackNotice(null);
+            }}
+            size="sm"
+            variant="outline"
+          >
+            <Flag className="h-4 w-4" /> Feedback
+          </Button>
 
           <Button
             onClick={submit}
@@ -785,6 +834,104 @@ export function Workspace({
             </motion.aside>
           )}
         </motion.div>
+      )}
+
+      {feedbackOpen && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-[#1f1506]/40 px-4 backdrop-blur-sm">
+          <div className="w-full max-w-xl overflow-hidden rounded-[28px] border border-[#dcc8a8] bg-[linear-gradient(180deg,_rgba(255,253,248,0.98)_0%,_rgba(247,239,223,0.98)_100%)] shadow-[0_28px_80px_rgba(40,27,4,0.22)]">
+            <div className="flex items-start justify-between gap-4 border-b border-[#dcc8a8] px-6 py-5">
+              <div>
+                <div className="text-[10px] uppercase tracking-[0.24em] text-bone/40">
+                  Candidate Feedback
+                </div>
+                <div className="mt-1 text-xl font-semibold text-bone">
+                  Share an issue or note with the employer
+                </div>
+                <p className="mt-2 text-sm leading-relaxed text-bone/55">
+                  This is for product issues, unclear instructions, workspace problems, or anything else you want the employer to review later.
+                </p>
+              </div>
+              <button
+                onClick={() => setFeedbackOpen(false)}
+                className="grid h-10 w-10 place-items-center rounded-2xl bg-white/90 text-bone/45 ring-1 ring-black/[0.06] transition hover:text-bone"
+                title="Close feedback"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="space-y-5 px-6 py-6">
+              <div className="rounded-2xl border border-black/[0.06] bg-white/75 px-4 py-3 text-sm text-bone/65">
+                {activeChallenge ? (
+                  <>
+                    Attached to <span className="font-medium text-bone">{activeChallenge.title}</span>
+                    {activeChallenge.kind ? ` · ${activeChallenge.kind}` : ""}
+                  </>
+                ) : (
+                  "This will be recorded as general assessment feedback."
+                )}
+              </div>
+
+              <div>
+                <label className="mb-2 block text-xs font-medium uppercase tracking-[0.2em] text-bone/45">
+                  Category
+                </label>
+                <select
+                  value={feedbackCategory}
+                  onChange={(event) => setFeedbackCategory(event.target.value as FeedbackCategory)}
+                  className="w-full rounded-2xl border border-black/[0.08] bg-white px-4 py-3 text-sm text-bone outline-none transition focus:border-accent/55 focus:shadow-[0_0_0_3px_rgba(124,58,237,0.14)]"
+                >
+                  {FEEDBACK_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+                <p className="mt-2 text-xs text-bone/45">
+                  {FEEDBACK_OPTIONS.find((option) => option.value === feedbackCategory)?.hint}
+                </p>
+              </div>
+
+              <div>
+                <label className="mb-2 block text-xs font-medium uppercase tracking-[0.2em] text-bone/45">
+                  What happened?
+                </label>
+                <textarea
+                  value={feedbackMessage}
+                  onChange={(event) => setFeedbackMessage(event.target.value)}
+                  placeholder="Describe the issue, confusion, or anything you want the employer to know."
+                  className="min-h-[170px] w-full rounded-2xl border border-black/[0.08] bg-white px-4 py-3 text-sm leading-relaxed text-bone outline-none transition focus:border-accent/55 focus:shadow-[0_0_0_3px_rgba(124,58,237,0.14)]"
+                />
+                <div className="mt-2 flex items-center justify-between gap-3 text-xs text-bone/40">
+                  <span>Include as much context as you need.</span>
+                  <span>{feedbackMessage.trim().length} chars</span>
+                </div>
+              </div>
+
+              {feedbackNotice && (
+                <div className="rounded-2xl border border-black/[0.06] bg-white/80 px-4 py-3 text-sm text-bone/65">
+                  {feedbackNotice}
+                </div>
+              )}
+
+              <div className="flex items-center justify-end gap-3">
+                <Button
+                  variant="ghost"
+                  onClick={() => setFeedbackOpen(false)}
+                  disabled={feedbackSubmitting}
+                >
+                  Close
+                </Button>
+                <Button
+                  onClick={submitFeedback}
+                  disabled={feedbackSubmitting}
+                >
+                  {feedbackSubmitting ? <><Loader2 className="h-4 w-4 animate-spin" /> Sending…</> : <><Flag className="h-4 w-4" /> Send feedback</>}
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

@@ -16,6 +16,7 @@ from app.models.schemas import (
     ActivityEvent,
     Assessment,
     BuddyTurn,
+    CandidateFeedback,
     CandidateSession,
     EvaluationResult,
     Invite,
@@ -85,6 +86,18 @@ class PostgresStore:
                 );
                 create index if not exists events_session_at_idx
                     on events (session_id, at);
+
+                create table if not exists feedback (
+                    id text primary key,
+                    assessment_id text not null,
+                    session_id text not null,
+                    created_at timestamptz not null,
+                    data jsonb not null
+                );
+                create index if not exists feedback_session_created_idx
+                    on feedback (session_id, created_at asc);
+                create index if not exists feedback_assessment_created_idx
+                    on feedback (assessment_id, created_at desc);
 
                 create table if not exists buddy_turns (
                     session_id text not null,
@@ -187,6 +200,47 @@ class PostgresStore:
             assessment_id,
         )
         return [CandidateSession(**_load(row["data"])) for row in rows]
+
+    # ── Feedback ──────────────────────────────────────────────────────────
+    async def append_feedback(self, feedback: CandidateFeedback) -> None:
+        pool = self._require_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                insert into feedback (id, assessment_id, session_id, created_at, data)
+                values ($1, $2, $3, $4, $5::jsonb)
+                on conflict (id) do nothing
+                """,
+                feedback.id,
+                feedback.assessment_id,
+                feedback.session_id,
+                feedback.created_at,
+                _dump(feedback),
+            )
+
+    async def list_feedback_for_session(self, session_id: str) -> list[CandidateFeedback]:
+        pool = self._require_pool()
+        rows = await pool.fetch(
+            """
+            select data from feedback
+            where session_id = $1
+            order by created_at asc
+            """,
+            session_id,
+        )
+        return [CandidateFeedback(**_load(row["data"])) for row in rows]
+
+    async def list_feedback_for_assessment(self, assessment_id: str) -> list[CandidateFeedback]:
+        pool = self._require_pool()
+        rows = await pool.fetch(
+            """
+            select data from feedback
+            where assessment_id = $1
+            order by created_at desc
+            """,
+            assessment_id,
+        )
+        return [CandidateFeedback(**_load(row["data"])) for row in rows]
 
     # ── Events ────────────────────────────────────────────────────────────
     async def append_event(self, event: ActivityEvent) -> None:

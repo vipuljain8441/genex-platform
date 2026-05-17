@@ -198,6 +198,16 @@ export const MOCK_REPORT: ReportData = {
       },
     ],
   },
+  feedback_log: [
+    {
+      id: "FDB_demo_1",
+      category: "workspace",
+      message: "The terminal lagged for about a minute after opening the coding challenge.",
+      challenge_id: "CHL_demo_1",
+      status: "open",
+      created_at: "2026-05-17T09:26:12Z",
+    },
+  ],
   playback_url: "#",
   behaviour_analytics: {
     per_ticket: [

@@ -16,6 +16,7 @@ from app.models.schemas import (
     ActivityEvent,
     Assessment,
     BuddyTurn,
+    CandidateFeedback,
     CandidateSession,
     EvaluationResult,
 )
@@ -236,6 +237,15 @@ class BuddyAudit(TypedDict):
     actions: list[BuddyEditAction]
 
 
+class FeedbackEntry(TypedDict):
+    id: str
+    category: str
+    message: str
+    challenge_id: str | None
+    status: str
+    created_at: str
+
+
 class ReportData(TypedDict):
     available: bool  # false until evaluation exists
     header: CandidateHeader
@@ -250,6 +260,7 @@ class ReportData(TypedDict):
     code_review: CodeReview | None
     activity_forensics: ActivityForensics
     buddy_audit: BuddyAudit
+    feedback_log: list[FeedbackEntry]
     playback_url: str
     heatmap: Heatmap
 
@@ -738,6 +749,20 @@ def _build_buddy_audit(
     )
 
 
+def _build_feedback_log(feedback: list[CandidateFeedback]) -> list[FeedbackEntry]:
+    return [
+        FeedbackEntry(
+            id=item.id,
+            category=item.category.value,
+            message=item.message,
+            challenge_id=item.challenge_id,
+            status=item.status,
+            created_at=item.created_at.isoformat(),
+        )
+        for item in sorted(feedback, key=lambda entry: entry.created_at, reverse=True)
+    ]
+
+
 def _build_behaviour(
     session: CandidateSession,
     events: list[ActivityEvent],
@@ -921,6 +946,7 @@ def build_report(
     assessment: Assessment,
     events: list[ActivityEvent],
     buddy_history: list[BuddyTurn],
+    feedback: list[CandidateFeedback],
     evaluation: EvaluationResult | None,
     heatmap: Heatmap,
 ) -> ReportData:
@@ -936,6 +962,7 @@ def build_report(
     code_review = _build_code_review(evaluation)
     activity_forensics = _build_activity_forensics(events)
     buddy_audit = _build_buddy_audit(buddy_history, events)
+    feedback_log = _build_feedback_log(feedback)
 
     return ReportData(
         available=evaluation is not None,
@@ -951,6 +978,7 @@ def build_report(
         code_review=code_review,
         activity_forensics=activity_forensics,
         buddy_audit=buddy_audit,
+        feedback_log=feedback_log,
         playback_url=f"/playback/{session.id}",
         heatmap=heatmap,
     )

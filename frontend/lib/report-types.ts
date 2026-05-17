@@ -231,6 +231,15 @@ export type BuddyAudit = {
   actions: BuddyEditAction[];
 };
 
+export type FeedbackEntry = {
+  id: string;
+  category: string;
+  message: string;
+  challenge_id: string | null;
+  status: string;
+  created_at: string;
+};
+
 // ── Section 7a–7f: Behavioural analytics ────────────────────────────────────
 // Mirrors backend services/behaviour.py.
 
@@ -361,6 +370,7 @@ export type ReportData = {
   code_review: CodeReview | null;
   activity_forensics: ActivityForensics;
   buddy_audit: BuddyAudit;
+  feedback_log: FeedbackEntry[];
   playback_url: string;
   heatmap: Heatmap;
 };

@@ -7,7 +7,7 @@ import {
   CheckCircle2, Loader2, AlertTriangle, Sparkles, ExternalLink,
 } from "lucide-react";
 import {
-  api, streamAssessment, type Assessment, type AssessmentSessionSummary, type PipelineStage,
+  api, streamAssessment, type Assessment, type AssessmentFeedbackSummary, type AssessmentSessionSummary, type PipelineStage,
 } from "@/lib/api";
 import { Button } from "@/components/ui/Button";
 import { Card, CardBody } from "@/components/ui/Card";
@@ -36,6 +36,7 @@ function stageIndex(s: PipelineStage) {
 export function PipelineView({ initial }: { initial: Assessment }) {
   const [a, setA] = useState<Assessment>(initial);
   const [sessions, setSessions] = useState<AssessmentSessionSummary[]>([]);
+  const [feedback, setFeedback] = useState<AssessmentFeedbackSummary[]>([]);
 
   useEffect(() => {
     const close = streamAssessment(initial.id, setA);
@@ -50,8 +51,14 @@ export function PipelineView({ initial }: { initial: Assessment }) {
     let cancelled = false;
     const load = async () => {
       try {
-        const data = await api.listAssessmentSessions(initial.id);
-        if (!cancelled) setSessions(data);
+        const [sessionData, feedbackData] = await Promise.all([
+          api.listAssessmentSessions(initial.id),
+          api.listAssessmentFeedback(initial.id),
+        ]);
+        if (!cancelled) {
+          setSessions(sessionData);
+          setFeedback(feedbackData);
+        }
       } catch {}
     };
     load();
@@ -299,6 +306,69 @@ export function PipelineView({ initial }: { initial: Assessment }) {
                         <Badge tone="violet">Evaluating / active</Badge>
                       )}
                     </div>
+                  </div>
+                ))}
+              </div>
+            </CardBody>
+          </Card>
+        </motion.div>
+      )}
+
+      {ready && (
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+        >
+          <Card>
+            <CardBody>
+              <div className="flex items-center justify-between gap-3 flex-wrap">
+                <div>
+                  <div className="text-xs uppercase tracking-[0.22em] text-bone/40">
+                    Candidate feedback
+                  </div>
+                  <p className="mt-2 text-sm text-bone/60">
+                    Notes, issues, and concerns candidates submitted during the assessment.
+                  </p>
+                </div>
+                <Badge tone={feedback.length > 0 ? "amber" : "default"}>
+                  {feedback.length} item{feedback.length !== 1 ? "s" : ""}
+                </Badge>
+              </div>
+              <div className="mt-4 space-y-3">
+                {feedback.length === 0 ? (
+                  <div className="rounded-xl border border-black/[0.06] bg-black/[0.02] px-4 py-5 text-sm text-bone/50">
+                    No candidate feedback has been submitted for this assessment yet.
+                  </div>
+                ) : feedback.map((item) => (
+                  <div
+                    key={item.id}
+                    className="rounded-xl border border-black/[0.06] bg-black/[0.02] px-4 py-4"
+                  >
+                    <div className="flex items-start justify-between gap-3 flex-wrap">
+                      <div>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <div className="font-medium text-bone">{item.candidate_name}</div>
+                          <Badge tone="amber">{item.category}</Badge>
+                          {item.challenge_id && <Badge>{item.challenge_id}</Badge>}
+                        </div>
+                        <div className="mt-2 text-xs text-bone/45">
+                          {new Date(item.created_at).toLocaleString()}
+                          {item.submitted_at ? ` · Candidate submitted ${new Date(item.submitted_at).toLocaleString()}` : " · Candidate still active"}
+                        </div>
+                      </div>
+                      {item.has_evaluation ? (
+                        <Link href={item.report_url}>
+                          <Button size="sm" variant="outline">
+                            Open report
+                          </Button>
+                        </Link>
+                      ) : (
+                        <Badge tone="violet">Live session</Badge>
+                      )}
+                    </div>
+                    <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-bone/78">
+                      {item.message}
+                    </p>
                   </div>
                 ))}
               </div>

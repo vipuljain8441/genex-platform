@@ -259,6 +259,48 @@ You can verify the model endpoint with:
 curl http://localhost:11434/v1/models -H "Authorization: Bearer ollama"
 ```
 
+### Rebuild code-server after terminal security changes
+
+If you update the sandbox terminal restrictions, rebuild the `code-server` image and restart the backend workspace service:
+
+```bash
+cd /Users/vipuljain/Projects/Hackthhon2/genex-platform
+docker compose build --no-cache code-server
+docker compose up -d code-server
+docker compose restart workspace
+```
+
+Check that `code-server` is running:
+
+```bash
+docker compose logs code-server --tail=100
+docker compose ps
+```
+
+### Verify candidate terminal restrictions
+
+After rebuilding, open a fresh candidate coding session in the browser and run these commands in the VS Code terminal:
+
+```bash
+echo $0
+pwd
+type bash
+cd ..
+pwd
+bash
+/bin/bash
+sudo ls
+su
+```
+
+Expected behavior:
+
+- terminal starts as a non-root user
+- `pwd` stays inside `/home/coder/sessions/<session-id>`
+- `cd ..` should not let the candidate escape the session root
+- `bash`, `/bin/bash`, `sudo`, and `su` should be blocked
+- `type bash` may show `bash is a function` when the restricted shell is active
+
 Related files:
 
 - `docker-compose.yml`
@@ -271,6 +313,7 @@ Related files:
 - If CORS errors appear, confirm `ALLOW_ORIGINS=http://localhost:3000` in `backend/.env`
 - If Groq requests fail, verify your `LLM_API_KEY` or `GROQ_API_KEY`
 - If using Ollama, make sure the Ollama server is running and the model in `LLM_MODEL` has been pulled already
+- If terminal restrictions do not appear in code-server, rebuild the `code-server` image with `docker compose build --no-cache code-server` and reopen a brand-new terminal tab in the browser
 
 ## Project layout
 

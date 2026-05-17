@@ -131,6 +131,42 @@ export type ChallengeResponse = {
   updated_at: string;
 };
 
+export type FeedbackCategory =
+  | "general"
+  | "challenge"
+  | "workspace"
+  | "buddy"
+  | "bug"
+  | "performance"
+  | "clarity"
+  | "other";
+
+export type CandidateFeedback = {
+  id: string;
+  assessment_id: string;
+  session_id: string;
+  candidate_name: string;
+  challenge_id: string | null;
+  category: FeedbackCategory;
+  message: string;
+  status: "open" | "reviewed" | "resolved";
+  created_at: string;
+};
+
+export type AssessmentFeedbackSummary = {
+  id: string;
+  session_id: string;
+  candidate_name: string;
+  challenge_id: string | null;
+  category: FeedbackCategory;
+  message: string;
+  status: "open" | "reviewed" | "resolved";
+  created_at: string;
+  submitted_at: string | null;
+  has_evaluation: boolean;
+  report_url: string;
+};
+
 export type CandidateSessionView = {
   id: string;
   assessment_id: string;
@@ -242,6 +278,8 @@ export const api = {
     http<Assessment[]>("/api/employer/assessments"),
   listAssessmentSessions: (id: string) =>
     http<AssessmentSessionSummary[]>(`/api/employer/assessments/${id}/sessions`),
+  listAssessmentFeedback: (id: string) =>
+    http<AssessmentFeedbackSummary[]>(`/api/employer/assessments/${id}/feedback`),
 
   startSession: (assessment_id: string, candidate_name: string) =>
     http<{ session: CandidateSessionView; assessment: Assessment }>(
@@ -270,6 +308,18 @@ export const api = {
   ) =>
     http<CandidateSessionView>(`/api/candidate/sessions/${sid}/challenges/${challenge_id}/response`, {
       method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  submitFeedback: (
+    sid: string,
+    body: {
+      category: FeedbackCategory;
+      message: string;
+      challenge_id?: string | null;
+    }
+  ) =>
+    http<CandidateFeedback>(`/api/candidate/sessions/${sid}/feedback`, {
+      method: "POST",
       body: JSON.stringify(body),
     }),
   submit: (sid: string) =>
