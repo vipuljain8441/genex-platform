@@ -109,6 +109,8 @@ export function Workspace({
   const [feedbackMessage, setFeedbackMessage] = useState("");
   const [feedbackSubmitting, setFeedbackSubmitting] = useState(false);
   const [feedbackNotice, setFeedbackNotice] = useState<string | null>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [fullscreenError, setFullscreenError] = useState<string | null>(null);
 
   const [activeChallengeId, setActiveChallengeId] = useState<string | null>(
     initialChallengeId || challenges[0]?.id || null
@@ -124,6 +126,7 @@ export function Workspace({
   const [sqlResults, setSqlResults] = useState<Record<string, SqlResult>>({});
   const responseDebounce = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const sidebarDragState = useRef<{ startX: number; startWidth: number } | null>(null);
+  const suppressFullscreenLock = useRef(false);
   const sectionDragState = useRef<{
     startY: number;
     startHeight: number;
@@ -171,6 +174,33 @@ export function Workspace({
   useEffect(() => {
     behaviourTracker.setTicket(activeChallengeId);
   }, [activeChallengeId]);
+
+  useEffect(() => {
+    function syncFullscreenState() {
+      const next = typeof document !== "undefined" && !!document.fullscreenElement;
+      setIsFullscreen(next);
+      if (next) {
+        setFullscreenError(null);
+        monitor.event("window_focus", null, { reason: "fullscreen_enter" });
+      } else if (!suppressFullscreenLock.current) {
+        monitor.event("window_blur", null, { reason: "fullscreen_exit" });
+      }
+    }
+
+    syncFullscreenState();
+    document.addEventListener("fullscreenchange", syncFullscreenState);
+    return () => document.removeEventListener("fullscreenchange", syncFullscreenState);
+  }, []);
+
+  useEffect(() => {
+    function onBeforeUnload(event: BeforeUnloadEvent) {
+      if (suppressFullscreenLock.current) return;
+      event.preventDefault();
+      event.returnValue = "";
+    }
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, []);
 
   useEffect(() => {
     if (viewMode === "overview") {
@@ -283,8 +313,9 @@ export function Workspace({
     setActiveChallengeId(challengeId);
     setViewMode("workspace");
     setChallengePanelState("expanded");
-    setBuddyPanelState((current) => (current === "closed" ? "expanded" : current));
+    setBuddyPanelState((current) => (current === "closed" ? "minimized" : current));
     setPanelSlidOut(false);
+    setRightWidth((current) => clampWidth(Math.max(current, DEFAULT_WIDTH)));
     monitor.event("challenge_switch", null, { challenge_id: challengeId, challenge_kind: challenge.kind });
     behaviourTracker.markActivity(
       challenge.kind === "coding" ? "editor" : "ticket",
@@ -377,6 +408,7 @@ export function Workspace({
   // ── Submit ──────────────────────────────────────────────────────────────────
   async function submit() {
     setSubmitting(true);
+    suppressFullscreenLock.current = true;
     behaviourTracker.markActivity("submit", "submit");
     monitor.event("submit", null, { assessment_id: assessmentId });
     behaviourTracker.stop();
@@ -390,12 +422,41 @@ export function Workspace({
     } catch {}
     try {
       await api.submit(sessionId);
+      if (document.fullscreenElement && document.exitFullscreen) {
+        try { await document.exitFullscreen(); } catch {}
+      }
       router.push(`/candidate/submitted/${sessionId}`);
     } catch (e: any) {
       alert(`Submit failed: ${e.message}`);
+      suppressFullscreenLock.current = false;
       monitor.start(sessionId);
       setSubmitting(false);
     }
+  }
+
+  async function requestFullscreenMode() {
+    if (typeof document === "undefined") return;
+    const root = document.documentElement;
+    if (!root.requestFullscreen) {
+      setFullscreenError("This browser does not support fullscreen mode for the assessment.");
+      return;
+    }
+    try {
+      await root.requestFullscreen();
+      setFullscreenError(null);
+    } catch (e: any) {
+      setFullscreenError(e?.message || "Fullscreen was blocked. Please allow fullscreen to continue.");
+    }
+  }
+
+  async function exitWorkspace() {
+    suppressFullscreenLock.current = true;
+    behaviourTracker.stop();
+    monitor.stop();
+    if (document.fullscreenElement && document.exitFullscreen) {
+      try { await document.exitFullscreen(); } catch {}
+    }
+    router.push("/");
   }
 
   async function submitFeedback() {
@@ -611,7 +672,7 @@ export function Workspace({
                   <iframe
                     src={sandboxUrl}
                     className="w-full h-full border-0"
-                    allow="clipboard-read; clipboard-write; fullscreen"
+                    allow="clipboard-read; clipboard-write"
                     title="VS Code Editor"
                   />
                 )}
@@ -927,6 +988,43 @@ export function Workspace({
                   disabled={feedbackSubmitting}
                 >
                   {feedbackSubmitting ? <><Loader2 className="h-4 w-4 animate-spin" /> Sending…</> : <><Flag className="h-4 w-4" /> Send feedback</>}
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {!isFullscreen && !suppressFullscreenLock.current && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-[#1a1204]/82 px-4 backdrop-blur-md">
+          <div className="w-full max-w-lg overflow-hidden rounded-[28px] border border-[#dcc8a8] bg-[linear-gradient(180deg,_rgba(255,253,248,0.98)_0%,_rgba(247,239,223,0.98)_100%)] shadow-[0_28px_80px_rgba(40,27,4,0.28)]">
+            <div className="border-b border-[#dcc8a8] px-6 py-5">
+              <div className="text-[10px] uppercase tracking-[0.24em] text-bone/40">
+                Fullscreen Required
+              </div>
+              <div className="mt-2 text-2xl font-semibold text-bone">
+                Return to fullscreen to continue the assessment
+              </div>
+              <p className="mt-3 text-sm leading-relaxed text-bone/60">
+                This session is designed to stay in fullscreen while the candidate is inside the workspace.
+                If fullscreen is exited, interaction stays locked until fullscreen is restored or the workspace is exited.
+              </p>
+            </div>
+            <div className="space-y-4 px-6 py-6">
+              <div className="rounded-2xl border border-black/[0.06] bg-white/75 px-4 py-3 text-sm text-bone/65">
+                Tab switches, blur events, and fullscreen exits are still tracked in the assessment activity log.
+              </div>
+              {fullscreenError && (
+                <div className="rounded-2xl border border-coral/25 bg-coral/10 px-4 py-3 text-sm text-coral">
+                  {fullscreenError}
+                </div>
+              )}
+              <div className="flex items-center justify-end gap-3">
+                <Button variant="ghost" onClick={exitWorkspace}>
+                  Exit workspace
+                </Button>
+                <Button onClick={requestFullscreenMode}>
+                  <Maximize2 className="h-4 w-4" /> Enter fullscreen
                 </Button>
               </div>
             </div>

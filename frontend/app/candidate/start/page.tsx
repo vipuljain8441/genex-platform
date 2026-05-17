@@ -17,14 +17,25 @@ function CandidateStartInner() {
   const [starting, setStarting] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
+  async function requestBrowserFullscreen() {
+    if (typeof document === "undefined") return;
+    const root = document.documentElement;
+    if (document.fullscreenElement || !root.requestFullscreen) return;
+    await root.requestFullscreen();
+  }
+
   async function go() {
     if (!aid) return setErr("Missing assessment id (use the link from the employer)");
     setStarting(true);
     try {
+      await requestBrowserFullscreen();
       const { session } = await api.startSession(aid, name || "Candidate");
       router.push(`/candidate/${session.id}`);
     } catch (e: any) {
-      setErr(e.message);
+      if (typeof document !== "undefined" && document.fullscreenElement && document.exitFullscreen) {
+        try { await document.exitFullscreen(); } catch {}
+      }
+      setErr(e.message || "Could not start the assessment.");
       setStarting(false);
     }
   }
@@ -48,6 +59,10 @@ function CandidateStartInner() {
             codebase, some will test judgment or written reasoning. You'll have access
             to the workspace and a buddy who can help — but won't solve. Everything you
             do is captured so we can show your future team how you think.
+          </p>
+          <p className="mt-3 text-xs leading-6 text-bone/45">
+            The assessment will request browser fullscreen when you start. If fullscreen is exited during the session,
+            you will need to re-enter before continuing.
           </p>
         </CardHeader>
         <CardBody className="space-y-5">
