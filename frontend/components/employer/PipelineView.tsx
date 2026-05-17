@@ -29,6 +29,14 @@ const ORDER: PipelineStage[] = [
   "pending", "fetching", "extracting", "authoring", "ticketing", "challenging", "injecting", "ready",
 ];
 
+type AssessmentViewTab = "overview" | "sessions" | "feedback";
+type AssessmentTabConfig = {
+  key: AssessmentViewTab;
+  label: string;
+  count?: number;
+  readyOnly?: boolean;
+};
+
 function stageIndex(s: PipelineStage) {
   return ORDER.indexOf(s);
 }
@@ -37,6 +45,7 @@ export function PipelineView({ initial }: { initial: Assessment }) {
   const [a, setA] = useState<Assessment>(initial);
   const [sessions, setSessions] = useState<AssessmentSessionSummary[]>([]);
   const [feedback, setFeedback] = useState<AssessmentFeedbackSummary[]>([]);
+  const [activeTab, setActiveTab] = useState<AssessmentViewTab>("overview");
 
   useEffect(() => {
     const close = streamAssessment(initial.id, setA);
@@ -72,6 +81,11 @@ export function PipelineView({ initial }: { initial: Assessment }) {
   const cur = a.status.stage;
   const failed = cur === "failed";
   const ready = cur === "ready";
+  const tabs: AssessmentTabConfig[] = [
+    { key: "overview", label: "Overview" },
+    { key: "sessions", label: "Candidate Sessions", count: sessions.length, readyOnly: true },
+    { key: "feedback", label: "Feedback", count: feedback.length, readyOnly: true },
+  ];
 
   return (
     <div className="mx-auto max-w-4xl space-y-6">
@@ -104,162 +118,229 @@ export function PipelineView({ initial }: { initial: Assessment }) {
       </div>
 
       <Card>
-        <CardBody>
-          <div className="text-xs uppercase tracking-[0.22em] text-bone/40 mb-5">
-            Pipeline
-          </div>
-          <ol className="space-y-3">
-            {STAGES.map((s, idx) => {
-              const curIdx = stageIndex(cur);
-              const sIdx = stageIndex(s.key);
-              const isCurrent = !failed && !ready && s.key === cur;
-              const done = ready || (sIdx < curIdx) || (sIdx <= curIdx && curIdx === ORDER.length - 1);
+        <CardBody className="py-4">
+          <div className="flex items-center gap-2 flex-wrap">
+            {tabs.map((tab) => {
+              if (tab.readyOnly && !ready) return null;
+              const isActive = activeTab === tab.key;
               return (
-                <li
-                  key={s.key}
+                <button
+                  key={tab.key}
+                  onClick={() => setActiveTab(tab.key)}
                   className={cn(
-                    "flex items-center gap-4 rounded-xl border px-4 py-3 transition",
-                    isCurrent && "border-accent/40 bg-accent/[0.04]",
-                    done && !isCurrent && "border-black/[0.06] bg-black/[0.02]",
-                    !done && !isCurrent && "border-black/[0.04] bg-transparent opacity-50"
+                    "inline-flex items-center gap-2 rounded-2xl border px-4 py-2 text-sm font-medium tracking-tight transition",
+                    isActive
+                      ? "border-accent/35 bg-accent/[0.07] text-accent shadow-card"
+                      : "border-black/[0.06] bg-black/[0.02] text-bone/65 hover:bg-black/[0.04] hover:text-bone"
                   )}
                 >
-                  <div className="w-7 h-7 grid place-items-center rounded-full border border-black/[0.08] shrink-0">
-                    {done ? (
-                      <CheckCircle2 className="h-4 w-4 text-accent" />
-                    ) : isCurrent ? (
-                      <Loader2 className="h-4 w-4 animate-spin text-accent" />
-                    ) : (
-                      <span className="text-xs text-bone/30">{idx + 1}</span>
-                    )}
-                  </div>
-                  <div className="flex-1">
-                    <div className="text-sm">{s.label}</div>
-                    <div className="text-[11px] uppercase tracking-wider text-bone/40">
-                      {s.agent}
-                    </div>
-                  </div>
-                  <AnimatePresence>
-                    {isCurrent && (
-                      <motion.div
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                        exit={{ opacity: 0 }}
-                        className="text-xs text-accent/80 max-w-xs truncate"
-                      >
-                        {a.status.detail}
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
-                </li>
+                  <span>{tab.label}</span>
+                  {typeof tab.count === "number" && (
+                    <span
+                      className={cn(
+                        "rounded-full px-2 py-0.5 text-[11px]",
+                        isActive ? "bg-accent/12 text-accent" : "bg-black/[0.05] text-bone/55"
+                      )}
+                    >
+                      {tab.count}
+                    </span>
+                  )}
+                </button>
               );
             })}
-          </ol>
-
-          {failed && (
-            <div className="mt-4 flex items-start gap-3 rounded-xl border border-coral/40 bg-coral/10 p-4 text-sm text-coral">
-              <AlertTriangle className="h-5 w-5 mt-0.5 shrink-0" />
-              <div>
-                <div className="font-medium">Pipeline failed</div>
-                <div className="opacity-80">{a.status.detail}</div>
-              </div>
-            </div>
-          )}
+          </div>
         </CardBody>
       </Card>
 
-      {ready && (
-        <motion.div
-          initial={{ opacity: 0, y: 10 }}
-          animate={{ opacity: 1, y: 0 }}
-        >
-          <InviteCard assessmentId={a.id} />
-        </motion.div>
-      )}
-
-      {ready && a.candidate_challenges?.length > 0 && (
-        <motion.div
-          initial={{ opacity: 0, y: 10 }}
-          animate={{ opacity: 1, y: 0 }}
-        >
+      {activeTab === "overview" && (
+        <>
           <Card>
             <CardBody>
-              <div className="text-xs uppercase tracking-[0.22em] text-bone/40 mb-3">
-                Challenge sequence
+              <div className="text-xs uppercase tracking-[0.22em] text-bone/40 mb-5">
+                Pipeline
               </div>
-              <div className="space-y-3">
-                {a.candidate_challenges.map((challenge, idx) => (
-                  <div
-                    key={challenge.id}
-                    className="rounded-xl border border-black/[0.06] bg-black/[0.02] px-4 py-3"
-                  >
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <Badge>{idx + 1}</Badge>
-                      <Badge tone={challenge.kind === "coding" ? "accent" : challenge.kind === "theory" ? "violet" : challenge.kind === "sql" ? "amber" : "default"}>
-                        {challenge.kind}
-                      </Badge>
-                      <span className="text-xs text-bone/45">
-                        {challenge.estimated_minutes} min
-                      </span>
-                    </div>
-                    <div className="mt-2 font-medium text-bone">{challenge.title}</div>
-                    <p className="mt-1 text-sm text-bone/65 leading-relaxed whitespace-pre-line">
-                      {challenge.description || challenge.instructions}
-                    </p>
-                    {challenge.issues?.length > 0 && (
-                      <ul className="mt-2 space-y-1">
-                        {challenge.issues.map((issue) => (
-                          <li key={issue.id} className="text-xs text-bone/55">
-                            • {issue.title}: {issue.description}
-                          </li>
-                        ))}
-                      </ul>
-                    )}
+              <ol className="space-y-3">
+                {STAGES.map((s, idx) => {
+                  const curIdx = stageIndex(cur);
+                  const sIdx = stageIndex(s.key);
+                  const isCurrent = !failed && !ready && s.key === cur;
+                  const done = ready || (sIdx < curIdx) || (sIdx <= curIdx && curIdx === ORDER.length - 1);
+                  return (
+                    <li
+                      key={s.key}
+                      className={cn(
+                        "flex items-center gap-4 rounded-xl border px-4 py-3 transition",
+                        isCurrent && "border-accent/40 bg-accent/[0.04]",
+                        done && !isCurrent && "border-black/[0.06] bg-black/[0.02]",
+                        !done && !isCurrent && "border-black/[0.04] bg-transparent opacity-50"
+                      )}
+                    >
+                      <div className="w-7 h-7 grid place-items-center rounded-full border border-black/[0.08] shrink-0">
+                        {done ? (
+                          <CheckCircle2 className="h-4 w-4 text-accent" />
+                        ) : isCurrent ? (
+                          <Loader2 className="h-4 w-4 animate-spin text-accent" />
+                        ) : (
+                          <span className="text-xs text-bone/30">{idx + 1}</span>
+                        )}
+                      </div>
+                      <div className="flex-1">
+                        <div className="text-sm">{s.label}</div>
+                        <div className="text-[11px] uppercase tracking-wider text-bone/40">
+                          {s.agent}
+                        </div>
+                      </div>
+                      <AnimatePresence>
+                        {isCurrent && (
+                          <motion.div
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            exit={{ opacity: 0 }}
+                            className="text-xs text-accent/80 max-w-xs truncate"
+                          >
+                            {a.status.detail}
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+                    </li>
+                  );
+                })}
+              </ol>
+
+              {failed && (
+                <div className="mt-4 flex items-start gap-3 rounded-xl border border-coral/40 bg-coral/10 p-4 text-sm text-coral">
+                  <AlertTriangle className="h-5 w-5 mt-0.5 shrink-0" />
+                  <div>
+                    <div className="font-medium">Pipeline failed</div>
+                    <div className="opacity-80">{a.status.detail}</div>
                   </div>
-                ))}
-              </div>
+                </div>
+              )}
             </CardBody>
           </Card>
-        </motion.div>
+
+          {ready && (
+            <motion.div
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+            >
+              <InviteCard assessmentId={a.id} />
+            </motion.div>
+          )}
+
+          {ready && a.candidate_challenges?.length > 0 && (
+            <motion.div
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+            >
+              <Card>
+                <CardBody>
+                  <div className="text-xs uppercase tracking-[0.22em] text-bone/40 mb-3">
+                    Challenge sequence
+                  </div>
+                  <div className="space-y-3">
+                    {a.candidate_challenges.map((challenge, idx) => (
+                      <div
+                        key={challenge.id}
+                        className="rounded-xl border border-black/[0.06] bg-black/[0.02] px-4 py-3"
+                      >
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <Badge>{idx + 1}</Badge>
+                          <Badge tone={challenge.kind === "coding" ? "accent" : challenge.kind === "theory" ? "violet" : challenge.kind === "sql" ? "amber" : "default"}>
+                            {challenge.kind}
+                          </Badge>
+                          <span className="text-xs text-bone/45">
+                            {challenge.estimated_minutes} min
+                          </span>
+                        </div>
+                        <div className="mt-2 font-medium text-bone">{challenge.title}</div>
+                        <p className="mt-1 text-sm text-bone/65 leading-relaxed whitespace-pre-line">
+                          {challenge.description || challenge.instructions}
+                        </p>
+                        {challenge.issues?.length > 0 && (
+                          <ul className="mt-2 space-y-1">
+                            {challenge.issues.map((issue) => (
+                              <li key={issue.id} className="text-xs text-bone/55">
+                                • {issue.title}: {issue.description}
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </CardBody>
+              </Card>
+            </motion.div>
+          )}
+
+          {ready && a.candidate_ticket && (
+            <motion.div
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+            >
+              <Card>
+                <CardBody>
+                  <div className="text-xs uppercase tracking-[0.22em] text-bone/40 mb-3">
+                    Primary coding ticket
+                  </div>
+                  <div className="flex items-center gap-2 mb-2 flex-wrap">
+                    <Badge tone="coral">{a.candidate_ticket.priority}</Badge>
+                    {a.candidate_ticket.labels.map((l) => (
+                      <Badge key={l}>{l}</Badge>
+                    ))}
+                  </div>
+                  <div className="font-display text-xl font-semibold">{a.candidate_ticket.title}</div>
+                  <p className="mt-2 text-sm text-bone/65 leading-relaxed whitespace-pre-line">
+                    {a.candidate_ticket.description}
+                  </p>
+                  <div className="mt-4 text-xs uppercase tracking-[0.22em] text-bone/40">
+                    Acceptance criteria
+                  </div>
+                  <ul className="mt-2 space-y-1.5">
+                    {a.candidate_ticket.acceptance_criteria.map((c, i) => (
+                      <li key={i} className="flex items-start gap-2 text-sm text-bone/75">
+                        <CheckCircle2 className="h-4 w-4 mt-0.5 text-violet" />
+                        <span>{c}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </CardBody>
+              </Card>
+            </motion.div>
+          )}
+
+          {ready && a.buggy_codebase && (
+            <Card>
+              <CardBody>
+                <div className="flex items-center justify-between">
+                  <div className="text-xs uppercase tracking-[0.22em] text-bone/40">
+                    Generated artifact ({a.buggy_codebase.files.length} files)
+                  </div>
+                  <Link
+                    href={`/candidate/start?aid=${a.id}`}
+                    className="text-xs text-accent hover:underline inline-flex items-center gap-1"
+                  >
+                    Open workspace <ExternalLink className="h-3 w-3" />
+                  </Link>
+                </div>
+                <div className="mt-3 flex flex-wrap gap-1.5">
+                  {a.buggy_codebase.files.map((f) => (
+                    <span
+                      key={f.path}
+                      className="font-mono text-xs px-2 py-1 rounded-md bg-black/[0.04] border border-black/[0.06]"
+                    >
+                      {f.path}
+                    </span>
+                  ))}
+                </div>
+              </CardBody>
+            </Card>
+          )}
+        </>
       )}
 
-      {ready && a.candidate_ticket && (
-        <motion.div
-          initial={{ opacity: 0, y: 10 }}
-          animate={{ opacity: 1, y: 0 }}
-        >
-          <Card>
-            <CardBody>
-              <div className="text-xs uppercase tracking-[0.22em] text-bone/40 mb-3">
-                Primary coding ticket
-              </div>
-              <div className="flex items-center gap-2 mb-2 flex-wrap">
-                <Badge tone="coral">{a.candidate_ticket.priority}</Badge>
-                {a.candidate_ticket.labels.map((l) => (
-                  <Badge key={l}>{l}</Badge>
-                ))}
-              </div>
-              <div className="font-display text-xl font-semibold">{a.candidate_ticket.title}</div>
-              <p className="mt-2 text-sm text-bone/65 leading-relaxed whitespace-pre-line">
-                {a.candidate_ticket.description}
-              </p>
-              <div className="mt-4 text-xs uppercase tracking-[0.22em] text-bone/40">
-                Acceptance criteria
-              </div>
-              <ul className="mt-2 space-y-1.5">
-                {a.candidate_ticket.acceptance_criteria.map((c, i) => (
-                  <li key={i} className="flex items-start gap-2 text-sm text-bone/75">
-                    <CheckCircle2 className="h-4 w-4 mt-0.5 text-violet" />
-                    <span>{c}</span>
-                  </li>
-                ))}
-              </ul>
-            </CardBody>
-          </Card>
-        </motion.div>
-      )}
-
-      {ready && (
+      {ready && activeTab === "sessions" && (
         <motion.div
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
@@ -314,7 +395,7 @@ export function PipelineView({ initial }: { initial: Assessment }) {
         </motion.div>
       )}
 
-      {ready && (
+      {ready && activeTab === "feedback" && (
         <motion.div
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
@@ -375,34 +456,6 @@ export function PipelineView({ initial }: { initial: Assessment }) {
             </CardBody>
           </Card>
         </motion.div>
-      )}
-
-      {ready && a.buggy_codebase && (
-        <Card>
-          <CardBody>
-            <div className="flex items-center justify-between">
-              <div className="text-xs uppercase tracking-[0.22em] text-bone/40">
-                Generated artifact ({a.buggy_codebase.files.length} files)
-              </div>
-              <Link
-                href={`/candidate/start?aid=${a.id}`}
-                className="text-xs text-accent hover:underline inline-flex items-center gap-1"
-              >
-                Open workspace <ExternalLink className="h-3 w-3" />
-              </Link>
-            </div>
-            <div className="mt-3 flex flex-wrap gap-1.5">
-              {a.buggy_codebase.files.map((f) => (
-                <span
-                  key={f.path}
-                  className="font-mono text-xs px-2 py-1 rounded-md bg-black/[0.04] border border-black/[0.06]"
-                >
-                  {f.path}
-                </span>
-              ))}
-            </div>
-          </CardBody>
-        </Card>
       )}
     </div>
   );
