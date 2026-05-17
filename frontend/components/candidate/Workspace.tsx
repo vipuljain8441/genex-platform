@@ -7,21 +7,16 @@ import {
   useRef,
   useState,
 } from "react";
-import type { MouseEvent as ReactMouseEvent } from "react";
 import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import {
   ArrowLeft,
   Flag,
-  ChevronLeft,
-  ChevronRight,
   Clock,
   Code2,
-  ListChecks,
   Loader2,
   Maximize2,
   MessageSquareText,
-  Minus,
   Send,
   X,
 } from "lucide-react";
@@ -40,7 +35,8 @@ import { Badge } from "@/components/ui/Badge";
 import { cn } from "@/lib/utils";
 import { ChallengeOverview } from "./ChallengeOverview";
 import { ChallengePanel } from "./ChallengePanel";
-import { BuddyChat } from "./BuddyChat";
+import { ChallengesTopBar } from "./ChallengesTopBar";
+import { BuddyDock } from "./BuddyDock";
 
 type WorkspaceProps = {
   sessionId: string;
@@ -64,13 +60,10 @@ export type SqlResult = {
 type ViewMode = "overview" | "workspace";
 type PanelSectionState = "expanded" | "minimized" | "closed";
 
-const MIN_WIDTH = 300;
-const MAX_WIDTH = 560;
-const DEFAULT_WIDTH = 380;
-const MIN_SECTION_HEIGHT = 180;
-const MINIMIZED_SECTION_HEIGHT = 58;
-const DEFAULT_CHALLENGE_SECTION_HEIGHT = 480;
-const PANEL_PEEK_WIDTH = 56;
+const DEFAULT_BUDDY_WIDTH = 380;
+const DEFAULT_BRIEF_HEIGHT = 280;
+const MIN_BRIEF_HEIGHT = 120;
+const MAX_BRIEF_HEIGHT = 640;
 const FEEDBACK_OPTIONS: { value: FeedbackCategory; label: string; hint: string }[] = [
   { value: "general", label: "General", hint: "Anything that would help the employer understand the session." },
   { value: "challenge", label: "Challenge", hint: "Problem statement, scope, or expectation was unclear." },
@@ -81,10 +74,6 @@ const FEEDBACK_OPTIONS: { value: FeedbackCategory; label: string; hint: string }
   { value: "clarity", label: "Clarity", hint: "Instructions, labels, or UX confusion." },
   { value: "other", label: "Other", hint: "Something else worth sharing." },
 ];
-
-function clampWidth(w: number) {
-  return Math.max(MIN_WIDTH, Math.min(w, MAX_WIDTH));
-}
 
 export function Workspace({
   sessionId,
@@ -97,13 +86,11 @@ export function Workspace({
   const router = useRouter();
 
   const [viewMode, setViewMode] = useState<ViewMode>("overview");
-  const [challengePanelState, setChallengePanelState] = useState<PanelSectionState>("expanded");
   const [buddyPanelState, setBuddyPanelState] = useState<PanelSectionState>("expanded");
-  const [rightWidth, setRightWidth] = useState(DEFAULT_WIDTH);
-  const [challengePanelHeight, setChallengePanelHeight] = useState(DEFAULT_CHALLENGE_SECTION_HEIGHT);
-  const [panelSlidOut, setPanelSlidOut] = useState(false);
-  const [isSidebarDragging, setIsSidebarDragging] = useState(false);
-  const [isSectionDragging, setIsSectionDragging] = useState(false);
+  const [buddyWidth, setBuddyWidth] = useState(DEFAULT_BUDDY_WIDTH);
+  const [briefHeight, setBriefHeight] = useState(DEFAULT_BRIEF_HEIGHT);
+  const briefDragState = useRef<{ startY: number; startHeight: number } | null>(null);
+  const [isBriefDragging, setIsBriefDragging] = useState(false);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const [feedbackCategory, setFeedbackCategory] = useState<FeedbackCategory>("general");
   const [feedbackMessage, setFeedbackMessage] = useState("");
@@ -125,14 +112,7 @@ export function Workspace({
 
   const [sqlResults, setSqlResults] = useState<Record<string, SqlResult>>({});
   const responseDebounce = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
-  const sidebarDragState = useRef<{ startX: number; startWidth: number } | null>(null);
   const suppressFullscreenLock = useRef(false);
-  const sectionDragState = useRef<{
-    startY: number;
-    startHeight: number;
-    containerHeight: number;
-  } | null>(null);
-  const sectionContainerRef = useRef<HTMLDivElement | null>(null);
 
   const activeChallenge = challenges.find((c) => c.id === activeChallengeId) || challenges[0] || null;
   const isCodingChallenge = activeChallenge?.kind === "coding";
@@ -211,48 +191,12 @@ export function Workspace({
       behaviourTracker.setPanel("ai");
       return;
     }
-    if (challengePanelState === "expanded" || !isCodingChallenge) {
+    if (!isCodingChallenge) {
       behaviourTracker.setPanel("tickets");
       return;
     }
     behaviourTracker.setPanel("editor");
-  }, [viewMode, buddyPanelState, challengePanelState, isCodingChallenge]);
-
-  // ── Drag resize ─────────────────────────────────────────────────────────────
-  useEffect(() => {
-    function onMouseMove(event: MouseEvent) {
-      const sidebarDrag = sidebarDragState.current;
-      if (sidebarDrag) {
-        setRightWidth(clampWidth(sidebarDrag.startWidth - (event.clientX - sidebarDrag.startX)));
-      }
-      const sectionDrag = sectionDragState.current;
-      if (sectionDrag) {
-        const maxHeight = Math.max(
-          MIN_SECTION_HEIGHT,
-          sectionDrag.containerHeight - MIN_SECTION_HEIGHT
-        );
-        const nextHeight = Math.max(
-          MIN_SECTION_HEIGHT,
-          Math.min(maxHeight, sectionDrag.startHeight + (event.clientY - sectionDrag.startY))
-        );
-        setChallengePanelHeight(nextHeight);
-      }
-    }
-    function onMouseUp() {
-      sidebarDragState.current = null;
-      sectionDragState.current = null;
-      setIsSidebarDragging(false);
-      setIsSectionDragging(false);
-      document.body.style.cursor = "";
-      document.body.style.userSelect = "";
-    }
-    window.addEventListener("mousemove", onMouseMove);
-    window.addEventListener("mouseup", onMouseUp);
-    return () => {
-      window.removeEventListener("mousemove", onMouseMove);
-      window.removeEventListener("mouseup", onMouseUp);
-    };
-  }, []);
+  }, [viewMode, buddyPanelState, isCodingChallenge]);
 
   // ── Auto-commit ─────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -293,6 +237,35 @@ export function Workspace({
     }
   }, [sessionId]);
 
+  useEffect(() => {
+    function onMouseMove(event: globalThis.MouseEvent) {
+      const drag = briefDragState.current;
+      if (!drag) return;
+      const next = drag.startHeight + (event.clientY - drag.startY);
+      setBriefHeight(Math.max(MIN_BRIEF_HEIGHT, Math.min(MAX_BRIEF_HEIGHT, next)));
+    }
+    function onMouseUp() {
+      if (!briefDragState.current) return;
+      briefDragState.current = null;
+      setIsBriefDragging(false);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    }
+    globalThis.addEventListener("mousemove", onMouseMove);
+    globalThis.addEventListener("mouseup", onMouseUp);
+    return () => {
+      globalThis.removeEventListener("mousemove", onMouseMove);
+      globalThis.removeEventListener("mouseup", onMouseUp);
+    };
+  }, []);
+
+  function startBriefResize(clientY: number) {
+    briefDragState.current = { startY: clientY, startHeight: briefHeight };
+    setIsBriefDragging(true);
+    document.body.style.cursor = "row-resize";
+    document.body.style.userSelect = "none";
+  }
+
   // ── Challenge navigation ────────────────────────────────────────────────────
   async function selectChallenge(challengeId: string) {
     if (challengeId === activeChallengeId) return;
@@ -312,10 +285,7 @@ export function Workspace({
     if (!challenge) return;
     setActiveChallengeId(challengeId);
     setViewMode("workspace");
-    setChallengePanelState("expanded");
     setBuddyPanelState((current) => (current === "closed" ? "minimized" : current));
-    setPanelSlidOut(false);
-    setRightWidth((current) => clampWidth(Math.max(current, DEFAULT_WIDTH)));
     monitor.event("challenge_switch", null, { challenge_id: challengeId, challenge_kind: challenge.kind });
     behaviourTracker.markActivity(
       challenge.kind === "coding" ? "editor" : "ticket",
@@ -480,55 +450,22 @@ export function Workspace({
       });
       setFeedbackMessage("");
       setFeedbackCategory("general");
-      setFeedbackNotice("Feedback shared with the employer.");
+      setFeedbackNotice("Report shared with the employer.");
       window.setTimeout(() => {
         setFeedbackOpen(false);
         setFeedbackNotice(null);
       }, 900);
     } catch (e: any) {
-      setFeedbackNotice(e?.message || "Could not submit feedback right now.");
+      setFeedbackNotice(e?.message || "Could not submit report right now.");
     } finally {
       setFeedbackSubmitting(false);
     }
   }
 
-  function startResize(clientX: number) {
-    sidebarDragState.current = { startX: clientX, startWidth: rightWidth };
-    setIsSidebarDragging(true);
-    document.body.style.cursor = "col-resize";
-    document.body.style.userSelect = "none";
-  }
-
-  function startSectionResize(clientY: number) {
-    const container = sectionContainerRef.current;
-    if (!container) return;
-    sectionDragState.current = {
-      startY: clientY,
-      startHeight: challengePanelHeight,
-      containerHeight: container.clientHeight,
-    };
-    setIsSectionDragging(true);
-    document.body.style.cursor = "row-resize";
-    document.body.style.userSelect = "none";
-  }
-
-  function openChallengePanel() {
-    setChallengePanelState("expanded");
-    setPanelSlidOut(false);
-    behaviourTracker.setPanel("tickets");
-  }
-
   function openBuddyPanel() {
     setBuddyPanelState("expanded");
-    setPanelSlidOut(false);
     behaviourTracker.setPanel("ai");
   }
-
-  const panelOpen = challengePanelState !== "closed" || buddyPanelState !== "closed";
-  const panelWidth = panelOpen ? rightWidth : 0;
-  const panelSlideX = panelOpen && panelSlidOut ? Math.max(panelWidth - PANEL_PEEK_WIDTH, 0) : 0;
-  const bothExpanded =
-    challengePanelState === "expanded" && buddyPanelState === "expanded";
 
   // ── Render ──────────────────────────────────────────────────────────────────
   return (
@@ -565,32 +502,11 @@ export function Workspace({
 
           {viewMode === "workspace" && (
             <Button
-              onClick={openChallengePanel}
-              size="sm"
-              variant="outline"
-            >
-              <ListChecks className="h-4 w-4" /> Challenges
-            </Button>
-          )}
-
-          {viewMode === "workspace" && (
-            <Button
               onClick={openBuddyPanel}
               size="sm"
               variant="outline"
             >
               <MessageSquareText className="h-4 w-4" /> Buddy
-            </Button>
-          )}
-
-          {viewMode === "workspace" && panelOpen && (
-            <Button
-              onClick={() => setPanelSlidOut((current) => !current)}
-              size="sm"
-              variant="outline"
-            >
-              {panelSlidOut ? <ChevronLeft className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-              {panelSlidOut ? "Slide In" : "Slide Out"}
             </Button>
           )}
 
@@ -602,7 +518,7 @@ export function Workspace({
             size="sm"
             variant="outline"
           >
-            <Flag className="h-4 w-4" /> Feedback
+            <Flag className="h-4 w-4" /> Report
           </Button>
 
           <Button
@@ -637,284 +553,127 @@ export function Workspace({
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           transition={{ duration: 0.25 }}
-          className="flex-1 min-h-0 flex overflow-hidden relative"
+          className="flex-1 min-h-0 flex flex-col overflow-hidden relative"
         >
-          {/* ── Main content ── */}
-          <section
-            className={cn(
-              "flex-1 min-w-0 min-h-0 relative overflow-hidden transition-[filter] duration-300",
-              isCodingChallenge
-                ? "bg-[#1e1e1e]"
-                : "bg-[radial-gradient(circle_at_top_left,_rgba(244,200,110,0.12),_transparent_30%),linear-gradient(180deg,_#fbf7ee_0%,_#f4efe3_100%)]"
-            )}
-            style={{
-              filter: panelOpen ? "saturate(0.96)" : "none",
-            }}
-          >
-            {isCodingChallenge ? (
-              <>
-                {sandboxLoading && (
-                  <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-4 bg-[#1e1e1e] text-white/60">
-                    <Loader2 className="h-8 w-8 animate-spin" />
-                    <p className="text-sm font-medium text-white/80">Preparing workspace</p>
-                    <p className="text-xs">Setting up your coding environment…</p>
-                  </div>
-                )}
-                {!sandboxLoading && !sandboxUrl && (
-                  <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-[#1e1e1e] text-white/50">
-                    <Code2 className="h-10 w-10 opacity-30" />
-                    <p className="text-sm">Workspace not provisioned</p>
-                    <button onClick={ensureSandbox} className="px-4 py-2 rounded-lg bg-white/10 hover:bg-white/15 text-xs text-white/70 transition">
-                      Retry
-                    </button>
-                  </div>
-                )}
-                {!sandboxLoading && sandboxUrl && (
-                  <iframe
-                    src={sandboxUrl}
-                    className="w-full h-full border-0"
-                    allow="clipboard-read; clipboard-write"
-                    title="VS Code Editor"
-                  />
-                )}
-              </>
-            ) : (
-              <div className="h-full flex items-center justify-center">
-                <div className="text-center space-y-2 text-bone/40">
-                  <ListChecks className="h-10 w-10 mx-auto opacity-40" />
-                  <p className="text-sm">Answer the challenge in the panel →</p>
-                </div>
-              </div>
-            )}
-          </section>
+          {/* ── Top: challenges position bar ── */}
+          <ChallengesTopBar
+            challenges={challenges}
+            activeChallengeId={activeChallengeId}
+            responses={responses}
+            onSelectChallenge={selectChallenge}
+          />
 
-          {/* ── Right panel ── */}
-          {panelOpen && (
-            <motion.aside
-              initial={false}
-              animate={{
-                width: panelWidth,
-                x: panelSlideX,
-                opacity: 1,
-              }}
-              transition={{
-                width: isSidebarDragging ? { duration: 0 } : { type: "spring", stiffness: 260, damping: 28 },
-                x: isSidebarDragging ? { duration: 0 } : { type: "spring", stiffness: 250, damping: 30 },
-                opacity: { duration: 0.16 },
-              }}
-              className={cn(
-                "absolute right-0 top-0 bottom-0 z-20 border-l border-[#d9c9ac]/70 bg-[linear-gradient(180deg,_rgba(255,252,245,0.98)_0%,_rgba(247,239,223,0.96)_52%,_rgba(239,229,209,0.96)_100%)] backdrop-blur-md min-h-0 flex flex-col overflow-hidden shadow-[-28px_0_70px_rgba(53,38,16,0.16)] rounded-l-[28px]"
-              )}
-              style={{ width: panelWidth }}
-            >
-              <div className="absolute left-0 top-0 bottom-0 z-40 w-14 border-r border-[#dcc9aa]/80 bg-[linear-gradient(180deg,_rgba(255,252,246,0.96)_0%,_rgba(245,235,216,0.92)_100%)]">
-                <div className="flex h-full flex-col items-center justify-between py-4">
-                  <button
-                    onClick={() => setPanelSlidOut((current) => !current)}
-                    title={panelSlidOut ? "Slide panel left" : "Slide panel right"}
-                    className="grid h-9 w-9 place-items-center rounded-2xl bg-white/95 text-bone/65 shadow-sm ring-1 ring-[#d9c8aa] transition hover:text-bone hover:ring-accent/25"
-                  >
-                    {panelSlidOut ? <ChevronLeft className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-                  </button>
-
-                  <div className="flex flex-col items-center gap-2">
-                    <button
-                      onClick={openChallengePanel}
-                      className="grid h-9 w-9 place-items-center rounded-2xl bg-accent/10 text-accent transition hover:bg-accent/16"
-                      title="Open challenges"
-                    >
-                      <ListChecks className="h-4 w-4" />
-                    </button>
-                    <button
-                      onClick={openBuddyPanel}
-                      className="grid h-9 w-9 place-items-center rounded-2xl bg-[#1f7ae0]/10 text-[#1f7ae0] transition hover:bg-[#1f7ae0]/16"
-                      title="Open buddy"
-                    >
-                      <MessageSquareText className="h-4 w-4" />
-                    </button>
-                  </div>
-
-                  <div className="text-[10px] font-medium uppercase tracking-[0.22em] text-bone/35 [writing-mode:vertical-rl] rotate-180">
-                    Slide
-                  </div>
-                </div>
-              </div>
-
-              {/* ── Resize handle (left edge) ── */}
-              {!panelSlidOut && (
-                <div
-                  onMouseDown={(e: ReactMouseEvent<HTMLDivElement>) => startResize(e.clientX)}
-                  onDoubleClick={() => setRightWidth(DEFAULT_WIDTH)}
-                  className="absolute -left-3 top-0 bottom-0 z-30 w-6 cursor-col-resize group"
-                  title="Drag to resize"
-                >
-                  <div className="absolute left-1/2 top-1/2 flex h-24 w-3 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-white/92 shadow-sm ring-1 ring-black/[0.06] transition group-hover:bg-white group-hover:ring-accent/25">
-                    <div className="h-10 w-1 rounded-full bg-black/[0.12] transition group-hover:bg-accent/45" />
-                  </div>
-                </div>
-              )}
-
-              <div
-                className={cn(
-                  "ml-14 h-full flex flex-col min-h-0 transition-opacity duration-200",
-                  panelSlidOut && "pointer-events-none opacity-0"
-                )}
-              >
-              <div className="flex-shrink-0 border-b border-[#d8c7a8]/80 bg-[linear-gradient(180deg,_rgba(255,255,255,0.88)_0%,_rgba(255,249,238,0.78)_100%)] px-4 py-4">
-                <div className="text-[10px] uppercase tracking-[0.22em] text-bone/40">
-                  Assessment Side Panel
-                </div>
-                <div className="mt-1 text-base font-semibold text-bone">
-                  Challenges and Buddy
-                </div>
-                <div className="mt-1 text-[11px] leading-relaxed text-bone/50">
-                  Resize the panel horizontally. Drag the divider between sections to adjust their heights.
-                </div>
-              </div>
-
-              <div
-                ref={sectionContainerRef}
-                className="flex-1 min-h-0 overflow-hidden p-3"
-              >
-                <div className="flex h-full w-full flex-col gap-2 min-h-0">
-                {challengePanelState !== "closed" && (
-                  <section
-                    className="w-full overflow-hidden rounded-[22px] border border-[#dcc9a8]/85 bg-[linear-gradient(180deg,_rgba(255,255,255,0.94)_0%,_rgba(252,246,236,0.94)_100%)] shadow-[0_14px_28px_rgba(68,50,22,0.08)] flex flex-col"
-                    style={
-                      challengePanelState === "minimized"
-                        ? { height: MINIMIZED_SECTION_HEIGHT, flex: "0 0 auto" }
-                        : bothExpanded
-                          ? { height: challengePanelHeight, flex: "0 0 auto", minHeight: MIN_SECTION_HEIGHT }
-                          : { flex: "1 1 0%", minHeight: 0 }
-                    }
-                  >
-                    <div className="flex flex-shrink-0 items-center gap-3 border-b border-black/[0.06] bg-[#fffaf0] px-3 py-2">
-                      <div className="grid h-8 w-8 place-items-center rounded-xl bg-accent/12 text-accent">
-                        <ListChecks className="h-4 w-4" />
-                      </div>
-                      <div className="min-w-0">
-                        <div className="text-sm font-semibold text-bone">Challenges</div>
-                        <div className="text-[11px] text-bone/50">
-                          {completedCount}/{Math.max(challenges.length, 1)} completed
-                        </div>
-                      </div>
-                      <div className="ml-auto flex items-center gap-1">
-                        <button
-                          onClick={() => setChallengePanelState((current) => current === "expanded" ? "minimized" : "expanded")}
-                          title={challengePanelState === "expanded" ? "Minimize challenges" : "Expand challenges"}
-                          className="rounded-md p-1.5 text-bone/40 transition hover:bg-black/[0.06] hover:text-bone"
-                        >
-                          {challengePanelState === "expanded" ? <Minus className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
-                        </button>
-                        <button
-                          onClick={() => setChallengePanelState("closed")}
-                          title="Close challenges"
-                          className="rounded-md p-1.5 text-bone/40 transition hover:bg-black/[0.06] hover:text-bone"
-                        >
-                          <X className="h-3.5 w-3.5" />
-                        </button>
-                      </div>
-                    </div>
-                    {challengePanelState === "expanded" && (
-                      <div className="min-h-0 flex-1 overflow-hidden">
-                        <ChallengePanel
-                          challenges={challenges}
-                          activeChallengeId={activeChallengeId}
-                          responses={responses}
-                          sqlResults={sqlResults}
-                          onSelectChallenge={selectChallenge}
-                          onChangeStatus={updateChallengeStatus}
-                          onChangeAnswerText={updateChallengeAnswerText}
-                          onToggleObjectiveOption={toggleObjectiveOption}
-                          onRunSQL={runSQL}
-                        />
-                      </div>
-                    )}
-                  </section>
-                )}
-
-                {bothExpanded && (
+          {/* ── Main row: editor / answer UI + buddy sidebar ── */}
+          <div className="flex-1 min-h-0 flex overflow-hidden">
+            <div className="flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden">
+              {isCodingChallenge ? (
+                <>
                   <div
-                    onMouseDown={(e: ReactMouseEvent<HTMLDivElement>) => startSectionResize(e.clientY)}
-                    onDoubleClick={() => setChallengePanelHeight(DEFAULT_CHALLENGE_SECTION_HEIGHT)}
-                    className="group relative -my-1 h-3 flex-shrink-0 cursor-row-resize"
-                    title="Drag to resize sections"
+                    className="flex-shrink-0 relative overflow-hidden bg-[linear-gradient(180deg,_#fbf7ee_0%,_#f4efe3_100%)]"
+                    style={{ height: briefHeight }}
                   >
-                    <div className="absolute left-1/2 top-1/2 flex h-3 w-24 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-white/92 shadow-sm ring-1 ring-black/[0.06] transition group-hover:bg-white group-hover:ring-accent/25">
-                      <div className="h-1 w-10 rounded-full bg-black/[0.12] transition group-hover:bg-accent/45" />
+                    <div className="absolute inset-0">
+                      <ChallengePanel
+                        challenges={challenges}
+                        activeChallengeId={activeChallengeId}
+                        responses={responses}
+                        sqlResults={sqlResults}
+                        onSelectChallenge={selectChallenge}
+                        onChangeStatus={updateChallengeStatus}
+                        onChangeAnswerText={updateChallengeAnswerText}
+                        onToggleObjectiveOption={toggleObjectiveOption}
+                        onRunSQL={runSQL}
+                        showSelector={false}
+                      />
                     </div>
                   </div>
-                )}
-
-                {buddyPanelState !== "closed" && (
-                  <section
-                    className="w-full overflow-hidden rounded-[22px] border border-[#c8daf0]/85 bg-[linear-gradient(180deg,_rgba(251,254,255,0.95)_0%,_rgba(240,247,255,0.94)_100%)] shadow-[0_14px_28px_rgba(35,72,117,0.08)] flex flex-col"
-                    style={
-                      buddyPanelState === "minimized"
-                        ? { height: MINIMIZED_SECTION_HEIGHT, flex: "0 0 auto" }
-                        : { flex: "1 1 0%", minHeight: bothExpanded ? MIN_SECTION_HEIGHT : 0 }
-                    }
+                  <div
+                    onMouseDown={(e) => startBriefResize(e.clientY)}
+                    onDoubleClick={() => setBriefHeight(DEFAULT_BRIEF_HEIGHT)}
+                    className={cn(
+                      "group relative h-1.5 flex-shrink-0 cursor-row-resize border-y border-[#decba9]/70 bg-[#e8d6b6]/40 transition hover:bg-accent/30",
+                      isBriefDragging && "bg-accent/40"
+                    )}
+                    title="Drag to resize"
                   >
-                    <div className="flex flex-shrink-0 items-center gap-3 border-b border-[#c8daf0]/80 bg-[linear-gradient(180deg,_rgba(255,255,255,0.92)_0%,_rgba(241,248,255,0.84)_100%)] px-3 py-2">
-                      <div className="grid h-8 w-8 place-items-center rounded-xl bg-[#1f7ae0]/10 text-[#1f7ae0]">
-                        <MessageSquareText className="h-4 w-4" />
-                      </div>
-                      <div className="min-w-0">
-                        <div className="text-sm font-semibold text-bone">Buddy</div>
-                        <div className="text-[11px] text-bone/50">
-                          {buddyDisabled ? "Disabled for this challenge" : "Hints, explanations, and review"}
-                        </div>
-                      </div>
-                      <div className="ml-auto flex items-center gap-1">
-                        <button
-                          onClick={() => setBuddyPanelState((current) => current === "expanded" ? "minimized" : "expanded")}
-                          title={buddyPanelState === "expanded" ? "Minimize buddy" : "Expand buddy"}
-                          className="rounded-md p-1.5 text-bone/40 transition hover:bg-black/[0.06] hover:text-bone"
-                        >
-                          {buddyPanelState === "expanded" ? <Minus className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
-                        </button>
-                        <button
-                          onClick={() => setBuddyPanelState("closed")}
-                          title="Close buddy"
-                          className="rounded-md p-1.5 text-bone/40 transition hover:bg-black/[0.06] hover:text-bone"
-                        >
-                          <X className="h-3.5 w-3.5" />
-                        </button>
-                      </div>
-                    </div>
-                    {buddyPanelState === "expanded" && (
-                      <div className="min-h-0 flex-1 overflow-hidden">
-                        <BuddyChat
-                          sessionId={sessionId}
-                          challengeId={activeChallenge?.id}
-                          disabled={buddyDisabled}
-                          disabledReason="Buddy is disabled for this challenge."
-                          onApplyEdit={(filePath, newContent, rationale) => {
-                            monitor.event("buddy_edit_action", filePath, {
-                              action: "applied",
-                              challenge_id: activeChallenge?.id,
-                              rationale,
-                              content_length: newContent.length,
-                            });
-                          }}
-                          onDismissEdit={(filePath, rationale) => {
-                            monitor.event("buddy_edit_action", filePath, {
-                              action: "dismissed",
-                              challenge_id: activeChallenge?.id,
-                              rationale,
-                            });
-                          }}
-                          showHeader={false}
-                        />
+                    <div className="absolute left-1/2 top-1/2 h-1 w-16 -translate-x-1/2 -translate-y-1/2 rounded-full bg-bone/25 transition group-hover:bg-accent/60" />
+                  </div>
+                  <section className="flex-1 min-h-0 relative bg-[#1e1e1e]">
+                    {sandboxLoading && (
+                      <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-4 bg-[#1e1e1e] text-white/60">
+                        <Loader2 className="h-8 w-8 animate-spin" />
+                        <p className="text-sm font-medium text-white/80">Preparing workspace</p>
+                        <p className="text-xs">Setting up your coding environment…</p>
                       </div>
                     )}
+                    {!sandboxLoading && !sandboxUrl && (
+                      <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-[#1e1e1e] text-white/50">
+                        <Code2 className="h-10 w-10 opacity-30" />
+                        <p className="text-sm">Workspace not provisioned</p>
+                        <button onClick={ensureSandbox} className="px-4 py-2 rounded-lg bg-white/10 hover:bg-white/15 text-xs text-white/70 transition">
+                          Retry
+                        </button>
+                      </div>
+                    )}
+                    {!sandboxLoading && sandboxUrl && (
+                      <iframe
+                        src={sandboxUrl}
+                        className="w-full h-full border-0"
+                        allow="clipboard-read; clipboard-write"
+                        title="VS Code Editor"
+                      />
+                    )}
                   </section>
-                )}
+                </>
+              ) : (
+                <div className="flex-1 min-h-0 bg-[linear-gradient(180deg,_#fbf7ee_0%,_#f4efe3_100%)]">
+                  <ChallengePanel
+                    challenges={challenges}
+                    activeChallengeId={activeChallengeId}
+                    responses={responses}
+                    sqlResults={sqlResults}
+                    onSelectChallenge={selectChallenge}
+                    onChangeStatus={updateChallengeStatus}
+                    onChangeAnswerText={updateChallengeAnswerText}
+                    onToggleObjectiveOption={toggleObjectiveOption}
+                    onRunSQL={runSQL}
+                  />
                 </div>
-              </div>
-              </div>
-            </motion.aside>
-          )}
+              )}
+            </div>
+
+            <BuddyDock
+              hidden={buddyPanelState === "closed"}
+              minimized={buddyPanelState === "minimized"}
+              width={buddyWidth}
+              onWidthChange={setBuddyWidth}
+              onToggleMinimize={() =>
+                setBuddyPanelState((current) =>
+                  current === "expanded" ? "minimized" : "expanded"
+                )
+              }
+              onClose={() => setBuddyPanelState("closed")}
+              sessionId={sessionId}
+              challengeId={activeChallenge?.id}
+              disabled={buddyDisabled}
+              disabledReason="Buddy is disabled for this challenge."
+              onApplyEdit={(filePath, newContent, rationale) => {
+                monitor.event("buddy_edit_action", filePath, {
+                  action: "applied",
+                  challenge_id: activeChallenge?.id,
+                  rationale,
+                  content_length: newContent.length,
+                });
+              }}
+              onDismissEdit={(filePath, rationale) => {
+                monitor.event("buddy_edit_action", filePath, {
+                  action: "dismissed",
+                  challenge_id: activeChallenge?.id,
+                  rationale,
+                });
+              }}
+            />
+          </div>
         </motion.div>
       )}
 
@@ -924,7 +683,7 @@ export function Workspace({
             <div className="flex items-start justify-between gap-4 border-b border-[#dcc8a8] px-6 py-5">
               <div>
                 <div className="text-[10px] uppercase tracking-[0.24em] text-bone/40">
-                  Candidate Feedback
+                  Candidate Report
                 </div>
                 <div className="mt-1 text-xl font-semibold text-bone">
                   Share an issue or note with the employer
@@ -936,7 +695,7 @@ export function Workspace({
               <button
                 onClick={() => setFeedbackOpen(false)}
                 className="grid h-10 w-10 place-items-center rounded-2xl bg-white/90 text-bone/45 ring-1 ring-black/[0.06] transition hover:text-bone"
-                title="Close feedback"
+                title="Close report"
               >
                 <X className="h-4 w-4" />
               </button>
@@ -950,7 +709,7 @@ export function Workspace({
                     {activeChallenge.kind ? ` · ${activeChallenge.kind}` : ""}
                   </>
                 ) : (
-                  "This will be recorded as general assessment feedback."
+                  "This will be recorded as a general assessment report."
                 )}
               </div>
 
@@ -1008,7 +767,7 @@ export function Workspace({
                   onClick={submitFeedback}
                   disabled={feedbackSubmitting}
                 >
-                  {feedbackSubmitting ? <><Loader2 className="h-4 w-4 animate-spin" /> Sending…</> : <><Flag className="h-4 w-4" /> Send feedback</>}
+                  {feedbackSubmitting ? <><Loader2 className="h-4 w-4 animate-spin" /> Sending…</> : <><Flag className="h-4 w-4" /> Send report</>}
                 </Button>
               </div>
             </div>

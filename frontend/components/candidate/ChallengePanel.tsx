@@ -32,6 +32,7 @@ export function ChallengePanel({
   onChangeAnswerText,
   onToggleObjectiveOption,
   onRunSQL,
+  showSelector = true,
 }: {
   challenges: CandidateChallenge[];
   activeChallengeId: string | null;
@@ -42,6 +43,7 @@ export function ChallengePanel({
   onChangeAnswerText: (challengeId: string, value: string) => void;
   onToggleObjectiveOption: (challengeId: string, question: ObjectiveQuestion, optionId: string) => void;
   onRunSQL?: (challengeId: string, query: string) => void;
+  showSelector?: boolean;
 }) {
   const active = challenges.find((c) => c.id === activeChallengeId) || challenges[0];
   const completedCount = challenges.filter((c) => responses[c.id]?.status === "completed").length;
@@ -57,6 +59,7 @@ export function ChallengePanel({
   return (
     <div className="h-full w-full flex flex-col min-h-0 min-w-0 bg-transparent">
       {/* Compact challenge selector */}
+      {showSelector && (
       <div className="flex-shrink-0 border-b border-[#decba9]/80 px-3 py-2 bg-[linear-gradient(180deg,_rgba(255,251,243,0.98)_0%,_rgba(252,245,232,0.94)_100%)] space-y-2">
         <div className="flex items-center gap-2">
           <div className="h-1.5 flex-1 rounded-full bg-[#e8dcc7] overflow-hidden">
@@ -97,9 +100,10 @@ export function ChallengePanel({
           })}
         </div>
       </div>
+      )}
 
       {/* Active challenge detail */}
-      <div className="flex-1 min-h-0 min-w-0 overflow-y-auto overflow-x-hidden scrollbar-thin p-3 sm:p-4 space-y-4 bg-[linear-gradient(180deg,_rgba(255,252,246,0.86)_0%,_rgba(250,243,232,0.82)_100%)]">
+      <div className="flex-1 min-h-0 min-w-0 overflow-y-auto overflow-x-hidden overscroll-contain scrollbar-thin p-3 sm:p-4 space-y-4 bg-[linear-gradient(180deg,_rgba(255,252,246,0.86)_0%,_rgba(250,243,232,0.82)_100%)]">
         <div className="space-y-3">
           <div className="min-w-0">
             <div className="flex items-center gap-1.5 flex-wrap">
