@@ -15,10 +15,9 @@ ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL} \
 COPY frontend/package*.json ./
 RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi
 
-COPY frontend ./
+COPY frontend ./ 
 
 RUN npm run build
 
 EXPOSE 3000
-
 CMD ["npm", "run", "start", "--", "--hostname", "0.0.0.0", "--port", "3000"]
