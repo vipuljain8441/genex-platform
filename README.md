@@ -177,6 +177,60 @@ ollama pull qwen2.5-coder:1.5b
 LLM_MODEL=qwen2.5-coder:1.5b
 ```
 
+#### Option C: Use Amazon Bedrock with the OpenAI-compatible endpoint
+
+Amazon Bedrock provides OpenAI-compatible inference endpoints, so this project can use Bedrock without changing the agent code.
+
+Set your Bedrock API key in the shell:
+
+```bash
+export AWS_BEARER_TOKEN_BEDROCK=your_bedrock_api_key
+```
+
+Then set this in `backend/.env`:
+
+```env
+LLM_PROVIDER=openai_compatible
+LLM_MODEL=your_bedrock_model_id
+LLM_API_BASE=https://bedrock-mantle.<your-region>.api.aws/v1
+LLM_API_KEY=
+```
+
+How it works:
+
+- `LLM_PROVIDER=openai_compatible` keeps the existing OpenAI-style client
+- `LLM_API_BASE` points the app to the Amazon Bedrock OpenAI-compatible endpoint
+- if `LLM_API_KEY` is empty, the backend now falls back to `AWS_BEARER_TOKEN_BEDROCK`
+- `LLM_MODEL` should be the Bedrock model ID you want to use
+
+This works both locally and on EC2 as long as `AWS_BEARER_TOKEN_BEDROCK` is exported in the environment where the backend process starts.
+
+### Docker Compose with Bedrock
+
+If you want to run the full stack with Postgres, code-server, backend, and frontend without Ollama, use `docker-compose2.yml`.
+
+Export your public host and Bedrock settings first:
+
+```bash
+export PUBLIC_HOST=localhost
+export LLM_PROVIDER=openai_compatible
+export LLM_API_BASE=https://bedrock-mantle.ap-south-1.api.aws/v1
+export LLM_MODEL=qwen.qwen3-coder-30b-a3b-instruct
+export AWS_BEARER_TOKEN_BEDROCK=your_bedrock_api_key
+```
+
+Then start the stack:
+
+```bash
+docker compose -f docker-compose2.yml up --build
+```
+
+Notes:
+
+- `docker-compose2.yml` does not include Ollama.
+- If you prefer, you can export `LLM_API_KEY` instead of `AWS_BEARER_TOKEN_BEDROCK`.
+- For EC2, set `PUBLIC_HOST` to your public IP or domain before starting the stack.
+
 Now start the API:
 
 ```bash

@@ -83,6 +83,28 @@ class RecruiterContext(BaseModel):
     common_bug_patterns: str = ""
     additional_tech_notes: str = ""
 
+    @field_validator("domain_summary", "common_bug_patterns", "additional_tech_notes", mode="before")
+    @classmethod
+    def _coerce_text_fields(cls, v: object) -> str:
+        if v is None:
+            return ""
+        if isinstance(v, str):
+            return v.strip()
+        if isinstance(v, list):
+            return "\n".join(str(item).strip() for item in v if str(item).strip())
+        return str(v).strip()
+
+    @field_validator("sample_ticket_titles", mode="before")
+    @classmethod
+    def _coerce_sample_ticket_titles(cls, v: object) -> list[str]:
+        if v is None:
+            return []
+        if isinstance(v, str):
+            return [v.strip()] if v.strip() else []
+        if isinstance(v, list):
+            return [str(item).strip() for item in v if str(item).strip()]
+        return [str(v).strip()] if str(v).strip() else []
+
 
 class GitHubSource(BaseModel):
     """Public GitHub repo to use as the golden codebase instead of generating one."""
