@@ -1,0 +1,14 @@
+.git
+.gitignore
+**/__pycache__
+**/.pytest_cache
+**/.next
+**/node_modules
+**/venv
+**/.venv
+**/*.pyc
+**/*.pyo
+**/*.pyd
+**/tsconfig.tsbuildinfo
+postgres_data
+ollama_data

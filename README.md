@@ -259,6 +259,55 @@ You can verify the model endpoint with:
 curl http://localhost:11434/v1/models -H "Authorization: Bearer ollama"
 ```
 
+## Option 3: One-command full stack deployment
+
+If you want one compose file that runs the full project without any extra manual setup, use `docker-compose1.yml`.
+
+This stack starts:
+
+- frontend
+- backend
+- Postgres
+- Ollama
+- automatic Ollama model pull for `qwen2.5-coder:0.5b`
+- code-server sandbox
+
+Run it from the project root:
+
+```bash
+docker-compose -f docker-compose1.yml up --build
+```
+
+If your machine uses the newer Docker CLI plugin, this also works:
+
+```bash
+docker compose -f docker-compose1.yml up --build
+```
+
+What it does automatically:
+
+- creates the Postgres database
+- starts Ollama on port `11434`
+- pulls `qwen2.5-coder:0.5b` before the app stack comes up
+- starts backend on `http://localhost:8000`
+- starts frontend on `http://localhost:3000`
+- starts code-server on `http://localhost:8080`
+
+Ports:
+
+- frontend: `3000`
+- backend: `8000`
+- code-server: `8080`
+- sandbox sync: `8081`
+- Ollama: `11434`
+- Postgres: `5434`
+
+Important notes:
+
+- the first boot can take a while because Ollama needs to download the model
+- persistent data is stored in Docker volumes for Postgres, Ollama, and sandbox sessions
+- this compose file is intended to be the self-contained runtime stack, unlike `docker-compose.yml`, which is still closer to the dev workspace flow
+
 ### Rebuild code-server after terminal security changes
 
 If you update the sandbox terminal restrictions, rebuild the `code-server` image and restart the backend workspace service:
