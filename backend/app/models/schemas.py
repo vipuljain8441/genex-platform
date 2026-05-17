@@ -352,6 +352,17 @@ class EventKind(str, Enum):
     BUDDY_HINT = "buddy_hint"
     IDLE = "idle"
     SUBMIT = "submit"
+    # Behavioural tracking (see services/behaviour.py).
+    TICKET_FOCUS_START = "ticket_focus_start"
+    TICKET_FOCUS_END = "ticket_focus_end"
+    IDLE_START = "idle_start"
+    IDLE_END = "idle_end"
+    KEYSTROKE_BUCKET = "keystroke_bucket"
+    CONTENT_PASTE = "content_paste"
+    CONTENT_DELTA_SNAPSHOT = "content_delta_snapshot"
+    PANEL_FOCUS_CHANGE = "panel_focus_change"
+    WINDOW_BLUR = "window_blur"
+    WINDOW_FOCUS = "window_focus"
 
 
 class ActivityEvent(BaseModel):

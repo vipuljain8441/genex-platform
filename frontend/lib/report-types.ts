@@ -170,6 +170,122 @@ export type CodeReview = {
   info_count: number;
 };
 
+// ── Section 7a–7f: Behavioural analytics ────────────────────────────────────
+// Mirrors backend services/behaviour.py.
+
+export type TicketTimeSummary = {
+  ticket_id: string;
+  ticket_title: string;
+  story_points: number;
+  total_seconds: number;
+  active_seconds: number;
+  idle_seconds: number;
+  ai_seconds: number;
+  focus_periods: number;
+  stuck_flag: boolean;
+};
+
+export type IdleTier = "think_pause" | "extended_idle" | "inactive";
+
+export type IdleEpisode = {
+  at: string;
+  duration_seconds: number;
+  tier: IdleTier;
+  preceding_activity: string;
+  following_activity: string;
+  note: string;
+};
+
+export type IdleSummary = {
+  total_idle_seconds: number;
+  idle_percentage: number;
+  think_pause_count: number;
+  extended_idle_count: number;
+  inactive_count: number;
+  longest_episode: IdleEpisode | null;
+  idle_after_ai_suggestion: number;
+  episodes: IdleEpisode[];
+};
+
+export type KeystrokePattern =
+  | "fluent"
+  | "think-then-type"
+  | "paste-dominant"
+  | "uncertain"
+  | "insufficient_data";
+
+export type KeystrokePatternSummary = {
+  total_keystrokes: number;
+  average_wpm: number;
+  peak_wpm: number;
+  undo_count: number;
+  paste_vs_type_ratio: number;
+  delete_ratio: number;
+  dominant_pattern: KeystrokePattern;
+  wpm_sparkline: number[];
+};
+
+export type FileAttribution = {
+  file_path: string;
+  total_lines: number;
+  manual_pct: number;
+  ai_patch_pct: number;
+  pasted_pct: number;
+  unchanged_pct: number;
+};
+
+export type ContentAttributionSummary = {
+  files: FileAttribution[];
+  overall_manual_pct: number;
+  overall_ai_patch_pct: number;
+  overall_pasted_pct: number;
+  overall_unchanged_pct: number;
+};
+
+export type PanelTransition = { from: string; to: string; count: number };
+
+export type FocusPatternSummary = {
+  panel_time: Record<string, number>;
+  ticket_rereads: number;
+  longest_editor_stretch_seconds: number;
+  window_blur_count: number;
+  window_blur_total_seconds: number;
+  most_edited_file: string;
+  file_visit_order: string[];
+  transitions: PanelTransition[];
+};
+
+export type PhaseLabel = "exploration" | "planning" | "execution" | "verification";
+
+export type SessionPhase = {
+  phase: PhaseLabel;
+  start_at: string;
+  end_at: string;
+  duration_seconds: number;
+  confidence: number;
+  signals: string[];
+};
+
+export type PhaseSummary = {
+  phases: SessionPhase[];
+  time_in_exploration: number;
+  time_in_planning: number;
+  time_in_execution: number;
+  time_in_verification: number;
+  phase_sequence: string;
+  has_verification_phase: boolean;
+  exploration_before_execution: boolean;
+};
+
+export type BehaviourAnalytics = {
+  per_ticket: TicketTimeSummary[];
+  idle: IdleSummary;
+  keystrokes: KeystrokePatternSummary;
+  content_attribution: ContentAttributionSummary;
+  focus: FocusPatternSummary;
+  phases: PhaseSummary;
+};
+
 export type ReportData = {
   available: boolean;
   header: CandidateHeader;
@@ -178,6 +294,7 @@ export type ReportData = {
   bug_exposure: BugExposure;
   ai: AIInteraction;
   behaviour: BehaviourPattern;
+  behaviour_analytics: BehaviourAnalytics;
   integrity: IntegritySignals;
   strategy: StrategyAnswer[];
   code_review: CodeReview | null;

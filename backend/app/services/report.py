@@ -19,6 +19,10 @@ from app.models.schemas import (
     CandidateSession,
     EvaluationResult,
 )
+from app.services.behaviour import (
+    BehaviourAnalytics,
+    compute_behaviour_analytics,
+)
 from app.services.heatmap import Heatmap
 
 
@@ -179,6 +183,7 @@ class ReportData(TypedDict):
     bug_exposure: BugExposure
     ai: AIInteraction
     behaviour: BehaviourPattern
+    behaviour_analytics: BehaviourAnalytics  # Section 7a–7f
     integrity: IntegritySignals
     strategy: list[StrategyAnswer]
     code_review: CodeReview | None
@@ -685,6 +690,7 @@ def build_report(
     bug_exposure = _build_bug_exposure(assessment, events)
     ai = _build_ai_interaction(events, buddy_history)
     behaviour = _build_behaviour(session, events, heatmap)
+    behaviour_analytics = compute_behaviour_analytics(session, assessment, events)
     integrity = _build_integrity(events)
     strategy: list[StrategyAnswer] = []  # No strategy questions in the data model yet
     code_review = _build_code_review(evaluation)
@@ -697,6 +703,7 @@ def build_report(
         bug_exposure=bug_exposure,
         ai=ai,
         behaviour=behaviour,
+        behaviour_analytics=behaviour_analytics,
         integrity=integrity,
         strategy=strategy,
         code_review=code_review,

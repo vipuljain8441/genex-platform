@@ -13,19 +13,30 @@ import { EmployerMetrics } from "@/components/report/EmployerMetrics";
 import { BugExposureMap } from "@/components/report/BugExposureMap";
 import { AIInteraction } from "@/components/report/AIInteraction";
 import { BehaviourPattern } from "@/components/report/BehaviourPattern";
+import { PhaseTimeline } from "@/components/report/PhaseTimeline";
+import { PerTicketTime } from "@/components/report/PerTicketTime";
+import { CodingRhythm } from "@/components/report/CodingRhythm";
+import { CodeOriginMap } from "@/components/report/CodeOriginMap";
+import { IdleAnalysis } from "@/components/report/IdleAnalysis";
+import { PanelFlow } from "@/components/report/PanelFlow";
 import { IntegrityPanel } from "@/components/report/IntegrityPanel";
 import { StrategyAnswers } from "@/components/report/StrategyAnswers";
 import { CodeReviewPanel } from "@/components/report/CodeReviewPanel";
 import { PlaybackCTA } from "@/components/report/PlaybackCTA";
 import { api } from "@/lib/api";
 import type { ReportData } from "@/lib/report-types";
+import { MOCK_REPORT } from "@/lib/mock-report";
+
+// TEMP: set to true to render the page from MOCK_REPORT instead of hitting the API.
+const USE_MOCK_REPORT = false;
 
 export default function ResultsPage() {
   const params = useParams<{ id: string }>();
-  const [report, setReport] = useState<ReportData | null>(null);
+  const [report, setReport] = useState<ReportData | null>(USE_MOCK_REPORT ? MOCK_REPORT : null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (USE_MOCK_REPORT) return;
     let cancelled = false;
     const fetchOnce = async () => {
       try {
@@ -114,6 +125,24 @@ export default function ResultsPage() {
 
           {/* Section 7 — Behaviour & investigation */}
           <BehaviourPattern behaviour={report.behaviour} heatmap={report.heatmap} />
+
+          {/* Section 7a — Phase timeline */}
+          <PhaseTimeline phases={report.behaviour_analytics.phases} />
+
+          {/* Section 7b — Per-ticket time */}
+          <PerTicketTime tickets={report.behaviour_analytics.per_ticket} />
+
+          {/* Section 7c — Coding rhythm */}
+          <CodingRhythm data={report.behaviour_analytics.keystrokes} />
+
+          {/* Section 7d — Code origin map */}
+          <CodeOriginMap data={report.behaviour_analytics.content_attribution} />
+
+          {/* Section 7e — Idle analysis */}
+          <IdleAnalysis data={report.behaviour_analytics.idle} />
+
+          {/* Section 7f — Panel flow */}
+          <PanelFlow data={report.behaviour_analytics.focus} />
 
           {/* Section 8 — Integrity */}
           <IntegrityPanel integrity={report.integrity} />

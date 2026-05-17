@@ -22,6 +22,8 @@ function toMonaco(language: string, path: string): string {
   return LANG_MAP[ext] || "plaintext";
 }
 
+type SpecialKey = "undo" | "save" | "copy" | "paste" | "delete";
+
 export function CodeEditor({
   path,
   language,
@@ -32,6 +34,8 @@ export function CodeEditor({
   onBlur,
   onCursorMove,
   onSelectionChange,
+  onKeystroke,
+  onPaste,
 }: {
   path: string;
   language: string;
@@ -42,6 +46,8 @@ export function CodeEditor({
   onBlur?: () => void;
   onCursorMove?: (line: number, column: number) => void;
   onSelectionChange?: (startLine: number, endLine: number, selectedText: string) => void;
+  onKeystroke?: (special?: SpecialKey) => void;
+  onPaste?: (text: string) => void;
 }) {
   const editorRef = useRef<MonacoEditorNS.IStandaloneCodeEditor | null>(null);
 
@@ -60,7 +66,7 @@ export function CodeEditor({
       language={toMonaco(language, path)}
       value={value}
       onChange={(v) => onChange(v || "")}
-      onMount={(editor) => {
+      onMount={(editor, monaco) => {
         editorRef.current = editor;
         editor.onDidFocusEditorText(() => onFocus?.());
         editor.onDidBlurEditorText(() => onBlur?.());
@@ -78,6 +84,29 @@ export function CodeEditor({
             text
           );
         });
+        editor.onKeyDown((e) => {
+          let special: SpecialKey | undefined;
+          if (e.ctrlKey || e.metaKey) {
+            if (e.keyCode === monaco.KeyCode.KeyZ) special = "undo";
+            else if (e.keyCode === monaco.KeyCode.KeyS) special = "save";
+            else if (e.keyCode === monaco.KeyCode.KeyC) special = "copy";
+            else if (e.keyCode === monaco.KeyCode.KeyV) special = "paste";
+          } else if (
+            e.keyCode === monaco.KeyCode.Backspace ||
+            e.keyCode === monaco.KeyCode.Delete
+          ) {
+            special = "delete";
+          }
+          onKeystroke?.(special);
+        });
+        // Detect actual paste content (Ctrl+V key alone doesn't carry the text).
+        const dom = editor.getDomNode();
+        if (dom && onPaste) {
+          dom.addEventListener("paste", (event) => {
+            const text = event.clipboardData?.getData("text") || "";
+            if (text) onPaste(text);
+          });
+        }
       }}
       options={{
         fontSize: 13,
