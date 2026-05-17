@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import buddy, candidate, employer, invite, monitor, results
+from app.api.routes import buddy, candidate, employer, invite, monitor, results, sandbox
 from app.core.config import settings
 from app.store import store
 
@@ -53,3 +53,4 @@ app.include_router(buddy.router, prefix="/api")
 app.include_router(monitor.router, prefix="/api")
 app.include_router(results.router, prefix="/api")
 app.include_router(invite.router, prefix="/api")
+app.include_router(sandbox.router, prefix="/api")

@@ -5,10 +5,15 @@ import json
 import logging
 
 from app.core.llm import complete_json
+from app.agents.normalization import (
+    normalize_bug_brief_payload,
+    normalize_candidate_ticket_payload,
+)
 from app.models.schemas import (
     BugInjectionBrief,
     CandidateTicket,
     Codebase,
+    ExtractedContext,
     JobSpec,
 )
 from app.prompts.library import TICKET_AUTHOR
@@ -50,8 +55,17 @@ def _find_section(data: dict, *keys: str) -> dict | None:
 
 
 async def run(
-    job: JobSpec, golden: Codebase
+    job: JobSpec,
+    context: ExtractedContext,
+    golden: Codebase,
+    review_feedback: str = "",
 ) -> tuple[BugInjectionBrief, CandidateTicket]:
+    reviewer_section = (
+        "Reviewer feedback from a prior generation attempt:\n"
+        f"{review_feedback.strip()}\n\n"
+        if review_feedback.strip()
+        else ""
+    )
     job_compact = {
         "title": job.title,
         "role_family": job.role_family,
@@ -63,6 +77,9 @@ async def run(
     user = (
         "Job spec:\n"
         f"{json.dumps(job_compact, indent=2, default=str)}\n\n"
+        "Extracted context:\n"
+        f"{json.dumps(context.model_dump(mode='json'), indent=2, default=str)}\n\n"
+        f"{reviewer_section}"
         "Golden artifact files (first 800 chars each):\n"
         f"{json.dumps(_compact_files(golden), indent=2)}\n\n"
         "Produce the JSON described in the system prompt. "
@@ -84,6 +101,14 @@ async def run(
             f"Expected 'bug_brief' + 'candidate_ticket', got keys: {list(data.keys())}"
         )
 
-    brief = BugInjectionBrief(**brief_raw)
-    ticket = CandidateTicket(**ticket_raw)
+    brief_payload = normalize_bug_brief_payload(brief_raw)
+    ticket_payload = normalize_candidate_ticket_payload(ticket_raw)
+    log.info(
+        "ticket_author: normalized ticket priority=%s labels=%s defects=%d",
+        ticket_payload.get("priority"),
+        ticket_payload.get("labels"),
+        len(brief_payload.get("defects") or []),
+    )
+    brief = BugInjectionBrief(**brief_payload)
+    ticket = CandidateTicket(**ticket_payload)
     return brief, ticket

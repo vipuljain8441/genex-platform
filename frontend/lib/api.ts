@@ -316,6 +316,26 @@ export const api = {
       body: JSON.stringify({ repo_url }),
     }),
 
+  // ── Sandbox (VS Code + git + SQL) ──────────────────────────────────────
+  provisionSandbox: (sessionId: string) =>
+    http<{ url: string; session_id: string }>(`/api/sandbox/provision/${sessionId}`, {
+      method: "POST",
+    }),
+  syncSandbox: (sessionId: string) =>
+    http<{ synced: number }>(`/api/sandbox/sync/${sessionId}`, { method: "POST" }),
+  commitSandbox: (sessionId: string, message?: string) =>
+    http<{ committed: boolean; session_id: string }>(
+      `/api/sandbox/commit/${sessionId}${message ? `?message=${encodeURIComponent(message)}` : ""}`,
+      { method: "POST" }
+    ),
+  getDiff: (sessionId: string) =>
+    http<{ diff: string; stat: string }>(`/api/sandbox/diff/${sessionId}`),
+  runSQL: (sessionId: string, query: string) =>
+    http<{ columns: string[]; rows: Record<string, unknown>[]; rowcount: number; error: string | null }>(
+      `/api/sandbox/sql/${sessionId}`,
+      { method: "POST", body: JSON.stringify({ query }) }
+    ),
+
   analyzeJD: (jd_text: string) =>
     http<JDAnalysis>("/api/employer/jd/analyze", {
       method: "POST",

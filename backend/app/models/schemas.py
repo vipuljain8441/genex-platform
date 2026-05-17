@@ -8,10 +8,10 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Literal
+from typing import Any, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 def _now() -> datetime:
@@ -97,13 +97,7 @@ class JobSpec(BaseModel):
     codebase_source: CodebaseSource = CodebaseSource.GENERATED
     github_source: GitHubSource | None = None
     challenge_count: int = 4
-    challenge_types: list[ChallengeKind] = Field(
-        default_factory=lambda: [
-            ChallengeKind.CODING,
-            ChallengeKind.THEORY,
-            ChallengeKind.OBJECTIVE,
-        ]
-    )
+    challenge_types: list[ChallengeKind] = Field(default_factory=list)
 
 
 # ── Phase 1 outputs ───────────────────────────────────────────────────────────
@@ -178,6 +172,24 @@ class CandidateChallenge(BaseModel):
     issues: list[ChallengeIssue] = Field(default_factory=list)
     priority: Literal["low", "medium", "high", "critical"] = "medium"
     labels: list[str] = Field(default_factory=list)
+
+    @field_validator("labels", "acceptance_criteria", "related_files", mode="before")
+    @classmethod
+    def _coerce_string_list(cls, v: Any) -> list[str]:
+        if not isinstance(v, list):
+            return []
+        result = []
+        for item in v:
+            if item is None:
+                continue
+            if isinstance(item, str):
+                s = item.strip()
+                if s:
+                    result.append(s)
+            elif isinstance(item, (int, float)):
+                result.append(str(item))
+            # dicts/lists from malformed LLM output are silently dropped
+        return result
     reporter: str = "Priya Menon"
     assignee: str = "you"
     estimated_minutes: int = 15

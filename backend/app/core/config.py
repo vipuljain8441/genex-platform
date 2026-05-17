@@ -19,6 +19,20 @@ class Settings(BaseSettings):
     # Where the candidate-facing app lives. Embedded in invite emails.
     app_base_url: str = "http://localhost:3000"
 
+    # Sandbox (code-server) settings
+    # sandbox_sessions_dir: where the backend WRITES files (host/container path)
+    # sandbox_vscode_root:  path to that same dir AS SEEN BY code-server (may differ!)
+    #   Leave empty to default to sandbox_sessions_dir (correct when both run on same host)
+    #   Docker Compose: SANDBOX_SESSIONS_DIR=/sessions, SANDBOX_VSCODE_ROOT=/home/coder/sessions
+    sandbox_sessions_dir: str = "/tmp/genex-sessions"
+    sandbox_vscode_root: str = ""
+    sandbox_url: str = "http://localhost:8080"
+    sandbox_sync_url: str = "http://localhost:8081"
+
+    @property
+    def resolved_vscode_root(self) -> str:
+        return self.sandbox_vscode_root.strip() or self.sandbox_sessions_dir
+
     # Email provider — Resend. If unset, invites are created but no email is
     # sent; the employer can copy the link from the UI instead.
     resend_api_key: str = ""

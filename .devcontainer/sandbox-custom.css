@@ -1,0 +1,54 @@
+/* GenEx sandbox — hide AI/account/extension UI from code-server */
+
+/* ── Top menu bar: File, Edit, Selection, View, Help ─────────────────────── */
+.menubar,
+.menubar-menu-button {
+  display: none !important;
+}
+
+/* ── Activity bar: Extensions, Accounts, Manage (Settings gear), Chat ─────── */
+.activitybar li[aria-label="Extensions"],
+.activitybar li[title="Extensions"],
+.activitybar li[aria-label="Accounts"],
+.activitybar li[title="Accounts"],
+.activitybar li[aria-label="Manage"],
+.activitybar li[title="Manage"],
+.activitybar li[aria-label="Chat"],
+.activitybar li[title="Chat"],
+.activitybar li[aria-label="GitHub Copilot"],
+.activitybar li[title="GitHub Copilot"] {
+  display: none !important;
+}
+
+/* ── Bottom global activity bar icons (Account + Manage live here) ─────────── */
+.global-activity .action-item[aria-label="Accounts"],
+.global-activity .action-item[title="Accounts"],
+.global-activity .action-item[aria-label="Manage"],
+.global-activity .action-item[title="Manage"] {
+  display: none !important;
+}
+
+/* ── Extensions view in the primary sidebar ───────────────────────────────── */
+.part.sidebar .composite[id="workbench.view.extensions"],
+.part.sidebar [id="workbench.view.extensions"],
+.part.sidebar .pane-header[aria-label="Extensions"],
+.part.sidebar .pane-header[aria-label*="Extensions"],
+.part.sidebar .view-container[id="workbench.view.extensions"] {
+  display: none !important;
+}
+
+/* ── Command center chat button ───────────────────────────────────────────── */
+.chat-command-center,
+.command-center-chat {
+  display: none !important;
+}
+
+/* ── Secondary sidebar (right panel — Chat / Copilot views) ───────────────── */
+.part.auxiliarybar {
+  display: none !important;
+}
+
+/* ── Inline chat widget ───────────────────────────────────────────────────── */
+.inline-chat-widget {
+  display: none !important;
+}

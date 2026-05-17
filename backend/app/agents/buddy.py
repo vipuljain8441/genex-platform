@@ -35,7 +35,7 @@ async def run(req: BuddyRequest) -> BuddyResponse:
 
     edits = [BuddyEdit(**e) for e in data.get("edits", [])]
     return BuddyResponse(
-        hint=data["hint"],
+        hint=data.get("hint") or data.get("response") or data.get("message") or "",
         hint_level=data.get("hint_level", "nudge"),
         blocked=data.get("blocked", False),
         edits=edits,

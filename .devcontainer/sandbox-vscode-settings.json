@@ -1,0 +1,36 @@
+{
+  "editor.fontSize": 14,
+  "editor.tabSize": 4,
+  "editor.minimap.enabled": false,
+  "editor.wordWrap": "on",
+  "editor.formatOnSave": false,
+  "files.autoSave": "afterDelay",
+  "files.autoSaveDelay": 2000,
+  "files.hotExit": "off",
+  "terminal.integrated.fontSize": 13,
+  "terminal.integrated.defaultProfile.linux": "bash",
+  "python.defaultInterpreterPath": "/usr/bin/python3",
+  "workbench.colorTheme": "Default Dark+",
+  "workbench.startupEditor": "none",
+  "workbench.statusBar.visible": true,
+
+  "window.restoreWindows": "none",
+  "window.menuBarVisibility": "hidden",
+  "window.newWindowDimensions": "inherit",
+
+  "git.enableSmartCommit": true,
+  "git.autofetch": false,
+  "git.confirmSync": false,
+
+  "telemetry.telemetryLevel": "off",
+  "extensions.autoCheckUpdates": false,
+  "extensions.ignoreRecommendations": true,
+  "update.mode": "none",
+  "workbench.tips.enabled": false,
+  "workbench.welcomePage.enabled": false,
+
+  "chat.commandCenter.enabled": false,
+  "github.copilot.enable": { "*": false },
+  "github.copilot.chat.enabled": false,
+  "inlineChat.enabled": false
+}

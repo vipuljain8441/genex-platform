@@ -43,8 +43,8 @@ export function BuddyChat({
   challengeId?: string | null;
   disabled?: boolean;
   disabledReason?: string;
-  openFile: string | null;
-  workspace: Record<string, string>;
+  openFile?: string | null;
+  workspace?: Record<string, string>;
   onApplyEdit?: (filePath: string, newContent: string, rationale: string) => void;
   onDismissEdit?: (filePath: string, rationale: string) => void;
 }) {

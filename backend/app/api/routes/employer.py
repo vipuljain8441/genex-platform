@@ -265,17 +265,20 @@ async def get_assessment(assessment_id: str) -> Assessment:
 @router.websocket("/assessments/{assessment_id}/stream")
 async def stream_assessment(ws: WebSocket, assessment_id: str) -> None:
     await ws.accept()
-    initial = await store.get_assessment(assessment_id)
-    if initial:
-        await ws.send_text(initial.model_dump_json())
     try:
+        initial = await store.get_assessment(assessment_id)
+        if initial:
+            await ws.send_text(initial.model_dump_json())
         async for update in store.subscribe_assessment(assessment_id):
             await ws.send_text(update.model_dump_json())
     except WebSocketDisconnect:
         return
     except Exception as e:
         log.warning("stream closed: %s", e)
-        await ws.close()
+        try:
+            await ws.close()
+        except WebSocketDisconnect:
+            return
 
 
 # ── Invites ─────────────────────────────────────────────────────────────────

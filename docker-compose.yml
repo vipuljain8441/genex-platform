@@ -9,6 +9,7 @@ services:
       - .:/workspace
       - backend_venv:/workspace/genex-platform/backend/.venv
       - frontend_node_modules:/workspace/genex-platform/frontend/node_modules
+      - sandbox_sessions:/sessions
     environment:
       PYTHONUNBUFFERED: "1"
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
@@ -22,6 +23,11 @@ services:
       APP_BASE_URL: http://localhost:3000
       NEXT_PUBLIC_API_URL: http://localhost:8000
       NEXT_PUBLIC_WS_URL: ws://localhost:8000
+      NEXT_PUBLIC_SANDBOX_URL: http://localhost:8080
+      SANDBOX_SESSIONS_DIR: /sessions
+      SANDBOX_VSCODE_ROOT: /home/coder/sessions
+      SANDBOX_URL: http://localhost:8080
+      SANDBOX_SYNC_URL: http://code-server:8081
     ports:
       - "3000:3000"
       - "8000:8000"
@@ -52,8 +58,30 @@ services:
     volumes:
       - ollama_data:/root/.ollama
 
+  code-server:
+    build:
+      context: .
+      dockerfile: Dockerfile.sandbox
+    user: "1000"
+    ports:
+      - "8080:8080"
+      - "8081:8081"
+    volumes:
+      - sandbox_sessions:/home/coder/sessions
+      - /tmp/genex-sessions:/tmp/genex-sessions
+    environment:
+      PASSWORD: ""
+      SYNC_PORT: "8081"
+    command: >-
+      --bind-addr 0.0.0.0:8080
+      --auth none
+      --disable-telemetry
+      --disable-update-check
+      --disable-workspace-trust
+
 volumes:
   postgres_data:
   backend_venv:
   frontend_node_modules:
   ollama_data:
+  sandbox_sessions:

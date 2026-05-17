@@ -128,9 +128,10 @@ export function ChallengeOverview({
                 </div>
 
                 <div className="mt-4 flex flex-wrap items-center gap-2">
-                  {challenge.labels.slice(0, 3).map((label) => (
-                    <Badge key={label}>{label}</Badge>
-                  ))}
+                  {(challenge.labels ?? []).slice(0, 3).map((label, i) => {
+                    const text = typeof label === "string" ? label : String(label ?? "");
+                    return text ? <Badge key={`${text}-${i}`}>{text}</Badge> : null;
+                  })}
                   {!challenge.allow_buddy && (
                     <Badge tone="coral">
                       <Lock className="h-3 w-3" />

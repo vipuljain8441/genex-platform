@@ -15,13 +15,20 @@ _JOB_FIELDS = {"title", "role_family", "seniority", "industry", "must_have_skill
 _MAX_OUTPUT_TOKENS = 4000
 
 
-async def run(job: JobSpec, context: ExtractedContext) -> Codebase:
+async def run(job: JobSpec, context: ExtractedContext, review_feedback: str = "") -> Codebase:
     job_compact = {k: v for k, v in job.model_dump().items() if k in _JOB_FIELDS}
+    reviewer_section = (
+        "Reviewer feedback from a prior generation attempt:\n"
+        f"{review_feedback.strip()}\n\n"
+        if review_feedback.strip()
+        else ""
+    )
     user = (
         "Job spec:\n"
         f"{json.dumps(job_compact, indent=2, default=str)}\n\n"
         "Extracted context:\n"
         f"{json.dumps(context.model_dump(), indent=2, default=str)}\n\n"
+        f"{reviewer_section}"
         "Produce the golden artifact JSON described in the system prompt."
     )
     data = await complete_json(CODE_AUTHOR, user, temperature=0.6, max_tokens=_MAX_OUTPUT_TOKENS)

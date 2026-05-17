@@ -78,7 +78,7 @@ const DEFAULT_FORM: JobSpec = {
   pm_tool: "none",
   codebase_source: "generated",
   challenge_count: 4,
-  challenge_types: ["coding", "sql", "theory", "objective"],
+  challenge_types: ["coding"],
 };
 
 const PAGE_TRANSITION = {
