@@ -308,6 +308,56 @@ Important notes:
 - persistent data is stored in Docker volumes for Postgres, Ollama, and sandbox sessions
 - this compose file is intended to be the self-contained runtime stack, unlike `docker-compose.yml`, which is still closer to the dev workspace flow
 
+## Option 4: Free-tier / small-instance trial
+
+If you want to try the project on a smaller instance like `c7i-flex.large`, use `docker-compose.free.yml`.
+
+This setup is intentionally lighter:
+
+- no local Ollama
+- keeps local Postgres
+- hosted LLM only
+- frontend + backend + code-server only
+
+Why this exists:
+
+- `c7i-flex.large` has only `2 vCPU / 4 GiB RAM`
+- the full stack with Ollama is too heavy for that instance
+- this lighter stack is the most realistic way to test the platform on a free-tier-sized machine
+
+Run it like this:
+
+```bash
+cd genex-platform
+export LLM_PROVIDER=groq
+export LLM_API_KEY=your_groq_api_key
+export LLM_MODEL=llama-3.1-8b-instant
+docker-compose -f docker-compose.free.yml up --build
+```
+
+If you use another hosted OpenAI-compatible provider:
+
+```bash
+export LLM_PROVIDER=openai_compatible
+export LLM_API_KEY=your_api_key
+export LLM_API_BASE=https://your-provider.example.com/v1
+export LLM_MODEL=your_model_name
+docker-compose -f docker-compose.free.yml up --build
+```
+
+What starts:
+
+- frontend on `http://localhost:3000`
+- backend on `http://localhost:8000`
+- code-server on `http://localhost:8080`
+- Postgres on `localhost:5434`
+
+Important tradeoffs:
+
+- data is persisted in Postgres
+- this is for trying the product on a small instance, not for production durability
+- if generation quality or speed matters, use a stronger hosted model or a larger instance
+
 ### Rebuild code-server after terminal security changes
 
 If you update the sandbox terminal restrictions, rebuild the `code-server` image and restart the backend workspace service:
