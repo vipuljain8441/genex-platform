@@ -17,6 +17,7 @@ from groq import (
     APIStatusError as GroqAPIStatusError,
     AsyncGroq,
     BadRequestError as GroqBadRequestError,
+    NotFoundError as GroqNotFoundError,
     RateLimitError as GroqRateLimitError,
 )
 from openai import AsyncOpenAI, RateLimitError as OpenAIRateLimitError
@@ -57,14 +58,46 @@ _RATE_LIMIT_BACKOFF = (5, 15, 30)  # seconds between retries
 # Groq fallback model chain — tried when the primary model hits quota limits.
 # Avoid qwen3-* models: thinking mode is on by default and Groq does not expose
 # a supported API to disable it, causing unpredictable JSON structure in responses.
+# llama-3.1-70b-versatile was decommissioned on Groq — do not add it back.
 _GROQ_FALLBACK_MODELS = [
-    "meta-llama/llama-4-scout-17b-16e-instruct",   # Llama 4 Scout, separate quota pool
-    "meta-llama/llama-4-maverick-17b-128e-instruct", # Llama 4 Maverick, another pool
-    "llama-3.1-8b-instant",                          # small model, last resort
+    "llama-3.3-70b-versatile",
+    "llama-3.1-8b-instant",
+    "gemma2-9b-it",
 ]
+
+_GROQ_RETRY_AFTER_RE = re.compile(r"try again in ([\d.]+)s", re.IGNORECASE)
+_GROQ_TPM_RETRIES = 2
 
 # 400 error codes that mean "this model can't be used" — skip to next, don't raise
 _SKIP_MODEL_CODES = {"model_decommissioned", "model_not_active", "model_not_found"}
+
+
+def _groq_model_unavailable(exc: Exception) -> bool:
+    """True when we should try the next model in the Groq fallback chain."""
+    err_body = str(exc).lower()
+    if "model_not_found" in err_body or "does not exist" in err_body:
+        return True
+    if "decommissioned" in err_body:
+        return True
+    body = getattr(exc, "body", None)
+    if isinstance(body, dict):
+        code = (body.get("error") or {}).get("code", "")
+        if code in _SKIP_MODEL_CODES:
+            return True
+    status = getattr(exc, "status_code", None)
+    return status == 404
+
+
+def _groq_retry_after_seconds(exc: Exception) -> float | None:
+    m = _GROQ_RETRY_AFTER_RE.search(str(exc))
+    if not m:
+        return None
+    return min(float(m.group(1)) + 0.75, 60.0)
+
+
+def _groq_rate_limit_is_tpm(exc: Exception) -> bool:
+    s = str(exc).lower()
+    return "per minute" in s or "tokens per minute" in s or "tpm" in s
 
 
 async def complete(
@@ -109,13 +142,8 @@ async def _complete_groq(
     last_err: Exception | None = None
 
     for current_model in models_to_try:
-        for attempt, backoff in enumerate([0] + list(_RATE_LIMIT_BACKOFF)):
-            if backoff:
-                log.warning(
-                    "Groq rate limit on %s, retrying in %ds (attempt %d)…",
-                    current_model, backoff, attempt,
-                )
-                await asyncio.sleep(backoff)
+        tpm_retries = 0
+        while True:
             try:
                 kwargs: dict[str, Any] = {
                     "model": current_model,
@@ -131,34 +159,71 @@ async def _complete_groq(
                 return resp.choices[0].message.content or ""
             except GroqRateLimitError as e:
                 last_err = e
-                err_str = str(e).lower()
-                # Any quota exhaustion → skip immediately to next model
-                # (TPD = daily, TPM = per-minute — both mean this model can't serve us now)
-                log.warning("Rate limit on %s, trying next model: %s", current_model, str(e)[:120])
+                wait = _groq_retry_after_seconds(e)
+                if _groq_rate_limit_is_tpm(e) and tpm_retries < _GROQ_TPM_RETRIES:
+                    delay = wait or _RATE_LIMIT_BACKOFF[min(tpm_retries, len(_RATE_LIMIT_BACKOFF) - 1)]
+                    log.warning(
+                        "Groq TPM limit on %s, waiting %.1fs (retry %d/%d)",
+                        current_model,
+                        delay,
+                        tpm_retries + 1,
+                        _GROQ_TPM_RETRIES,
+                    )
+                    await asyncio.sleep(delay)
+                    tpm_retries += 1
+                    continue
+                log.warning(
+                    "Rate limit on %s, trying next model: %s",
+                    current_model,
+                    str(e)[:120],
+                )
                 break
-            except GroqBadRequestError as e:
+            except (GroqBadRequestError, GroqNotFoundError) as e:
                 last_err = e
-                err_body = str(e).lower()
-                # Model decommissioned / not active — skip to next model
-                body_dict = getattr(e, "body", {}) or {}
-                code = (body_dict.get("error") or {}).get("code", "")
-                if code in _SKIP_MODEL_CODES or "decommissioned" in err_body:
-                    log.warning("Model %s unavailable (%s), trying next", current_model, code)
+                if _groq_model_unavailable(e):
+                    log.warning("Model %s unavailable, trying next: %s", current_model, e)
                     break
-                # 400 due to request too large — also skip
+                err_body = str(e).lower()
                 if "token" in err_body and ("limit" in err_body or "large" in err_body):
                     log.warning("Request too large for %s, trying next model", current_model)
                     break
                 raise
             except GroqAPIStatusError as e:
                 last_err = e
-                # 413 = request too large for this model's context/quota window
+                if _groq_model_unavailable(e):
+                    log.warning("Model %s unavailable (%s), trying next", current_model, e.status_code)
+                    break
                 if e.status_code == 413:
                     log.warning("Request too large for %s (413), trying next model", current_model)
                     break
                 raise
             except Exception:
                 raise
+
+    # Last resort: one more try on the smallest model after TPM cooldown.
+    if last_err and _groq_rate_limit_is_tpm(last_err):
+        final_model = "llama-3.1-8b-instant"
+        delay = _groq_retry_after_seconds(last_err) or 10.0
+        log.warning(
+            "All Groq models rate-limited; final retry on %s in %.1fs",
+            final_model,
+            delay,
+        )
+        await asyncio.sleep(delay)
+        try:
+            kwargs = {
+                "model": final_model,
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+                "messages": messages,
+            }
+            if json_mode:
+                kwargs["response_format"] = {"type": "json_object"}
+            resp = await client.chat.completions.create(**kwargs)
+            log.info("Used final TPM cooldown retry on %s", final_model)
+            return resp.choices[0].message.content or ""
+        except Exception as e:
+            last_err = e
 
     raise last_err  # type: ignore[misc]
 
@@ -290,6 +355,80 @@ def extract_json(text: str) -> Any:
     return _loads_permissive_json(candidate)
 
 
+def _parse_llm_json(raw: str) -> Any:
+    """Parse model output as JSON with fence extraction fallback."""
+    try:
+        return _loads_permissive_json(raw)
+    except (json.JSONDecodeError, ValueError):
+        return extract_json(raw)
+
+
+def _groq_error_body(error: GroqBadRequestError) -> dict[str, Any]:
+    body = getattr(error, "body", None)
+    if isinstance(body, dict):
+        return body
+    if isinstance(body, str):
+        try:
+            return json.loads(body)
+        except json.JSONDecodeError:
+            pass
+    return {}
+
+
+def _recover_from_groq_json_validate(error: GroqBadRequestError) -> Any | None:
+    """Try to salvage Groq's failed_generation payload after json_validate_failed."""
+    err = (_groq_error_body(error).get("error") or {})
+    if err.get("code") != "json_validate_failed":
+        return None
+    failed = err.get("failed_generation")
+    if not isinstance(failed, str) or not failed.strip():
+        return None
+    for candidate in (failed, _escape_control_chars_in_strings(failed)):
+        try:
+            return _parse_llm_json(candidate)
+        except (json.JSONDecodeError, ValueError):
+            continue
+    return None
+
+
+async def _complete_json_retry_plain(
+    system: str,
+    user: str,
+    *,
+    max_tokens: int,
+    temperature: float,
+    reason: str,
+) -> Any:
+    log.warning(
+        "%s: retrying structured output without json_mode (%s)",
+        settings.resolved_llm_model,
+        reason,
+    )
+    retry_system = (
+        f"{system}\n\n"
+        "CRITICAL JSON OUTPUT RULES:\n"
+        "- Return ONE valid JSON object only. No markdown fences or commentary.\n"
+        "- Inside every string value (especially file `content`): use \\n for newlines.\n"
+        "- Escape every double quote as \\\". In Python code prefer single-quoted strings "
+        "for paths and messages (e.g. @app.get('/items/')) to avoid JSON breakage.\n"
+    )
+    retry_user = (
+        f"{user}\n\n"
+        "Your previous response was not valid JSON. Return the same schema again as "
+        "strict valid JSON only, with all special characters properly escaped."
+    )
+    raw = await complete(
+        system=retry_system,
+        user=retry_user,
+        max_tokens=max_tokens,
+        temperature=min(temperature, 0.25),
+        json_mode=False,
+    )
+    if not (raw or "").strip():
+        raise ValueError("empty response on JSON retry")
+    return _parse_llm_json(raw)
+
+
 async def complete_json(
     system: str,
     user: str,
@@ -297,51 +436,48 @@ async def complete_json(
     max_tokens: int = 4096,
     temperature: float = 0.4,
 ) -> Any:
-    """Chat completion with tolerant JSON parsing and one strict retry."""
-    # When using response_format=json_object, Groq requires the word "JSON" in
-    # the prompt. Our prompts already instruct to return JSON, so we're good.
-    raw = await complete(
-        system=system,
-        user=user,
-        max_tokens=max_tokens,
-        temperature=temperature,
-        json_mode=True,
-    )
+    """Chat completion with tolerant JSON parsing and Groq-safe fallbacks."""
+    raw: str
     try:
-        return _loads_permissive_json(raw)
-    except (json.JSONDecodeError, ValueError) as first_error:
-        try:
-            return extract_json(raw)
-        except (json.JSONDecodeError, ValueError):
-            pass
-
-        if _provider() not in {"openai", "openai_compatible", "vllm"}:
-            raise first_error
-
-        log.warning(
-            "structured JSON parse failed for %s; retrying with stricter prompt: %s",
-            settings.resolved_llm_model,
-            first_error,
-        )
-        retry_system = (
-            f"{system}\n\n"
-            "CRITICAL: Return ONLY strict valid JSON. "
-            "Do not include markdown fences or commentary. "
-            "Escape all newlines inside string values as \\n."
-        )
-        retry_user = (
-            f"{user}\n\n"
-            "Your last answer was invalid JSON. "
-            "Return the same schema again as strict valid JSON only."
-        )
-        raw_retry = await complete(
-            system=retry_system,
-            user=retry_user,
+        raw = await complete(
+            system=system,
+            user=user,
             max_tokens=max_tokens,
-            temperature=min(temperature, 0.2),
-            json_mode=False,
+            temperature=temperature,
+            json_mode=True,
         )
-        try:
-            return _loads_permissive_json(raw_retry)
-        except (json.JSONDecodeError, ValueError):
-            return extract_json(raw_retry)
+    except GroqBadRequestError as e:
+        err_body = str(e).lower()
+        if "json_validate" in err_body or "failed to generate json" in err_body:
+            recovered = _recover_from_groq_json_validate(e)
+            if recovered is not None:
+                log.info("Recovered pipeline JSON from Groq failed_generation")
+                return recovered
+            return await _complete_json_retry_plain(
+                system,
+                user,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                reason="json_validate_failed",
+            )
+        raise
+
+    if not (raw or "").strip():
+        return await _complete_json_retry_plain(
+            system,
+            user,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            reason="empty response",
+        )
+
+    try:
+        return _parse_llm_json(raw)
+    except (json.JSONDecodeError, ValueError) as first_error:
+        return await _complete_json_retry_plain(
+            system,
+            user,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            reason=str(first_error),
+        )

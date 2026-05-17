@@ -190,9 +190,10 @@ function SkillChips({
   tone?: "accent" | "amber" | "default";
 }) {
   if (!skills.length) return <span className="text-xs text-bone/35 italic">none detected</span>;
+  const unique = skills.filter((s, i) => skills.indexOf(s) === i);
   return (
     <div className="flex flex-wrap gap-1.5">
-      {skills.map((s) => (
+      {unique.map((s) => (
         <span
           key={s}
           className={cn(

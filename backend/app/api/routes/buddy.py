@@ -35,6 +35,7 @@ async def ask_buddy(req: BuddyRequest) -> BuddyResponse:
     )
 
     history = await store.get_buddy_history(req.session_id)
+    session_events = await store.get_events(req.session_id)
     enriched = BuddyRequest(**{**req.model_dump(), "history": history})
 
     await store.append_buddy_turn(
@@ -81,7 +82,11 @@ async def ask_buddy(req: BuddyRequest) -> BuddyResponse:
         )
         return response
 
-    response = await buddy_agent.run(enriched)
+    response = await buddy_agent.run(
+        enriched,
+        active_challenge=active_challenge,
+        session_events=session_events,
+    )
 
     await store.append_buddy_turn(
         req.session_id,
@@ -92,7 +97,11 @@ async def ask_buddy(req: BuddyRequest) -> BuddyResponse:
             session_id=req.session_id,
             kind=EventKind.BUDDY_HINT,
             file_path=req.open_file,
-            payload={"hint_level": response.hint_level, "blocked": response.blocked},
+            payload={
+                "hint_level": response.hint_level,
+                "blocked": response.blocked,
+                "challenge_id": challenge_id,
+            },
         )
     )
     return response

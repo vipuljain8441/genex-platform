@@ -114,6 +114,39 @@ class CodeFile(BaseModel):
     language: str
     content: str
 
+    @field_validator("path", "language", mode="before")
+    @classmethod
+    def _coerce_required_str(cls, v: object) -> str:
+        if v is None:
+            return ""
+        return str(v).strip()
+
+    @field_validator("content", mode="before")
+    @classmethod
+    def _coerce_content(cls, v: object) -> str:
+        if v is None:
+            return ""
+        if isinstance(v, str):
+            return v
+        return str(v)
+
+    @classmethod
+    def from_llm(cls, raw: dict, *, fallback: "CodeFile | None" = None) -> "CodeFile | None":
+        """Parse LLM file dict; use golden `fallback` when content/path missing."""
+        if not isinstance(raw, dict):
+            return fallback
+        path = raw.get("path") or raw.get("file_path") or (fallback.path if fallback else None)
+        if not path:
+            return None
+        path = str(path).strip()
+        content = raw.get("content")
+        if content is None and fallback is not None:
+            content = fallback.content
+        elif content is None:
+            content = ""
+        language = raw.get("language") or (fallback.language if fallback else "text")
+        return cls(path=path, language=str(language), content=content)
+
 
 class Codebase(BaseModel):
     """A bundle of files that together form an artifact (code, tests, pipeline)."""
@@ -121,6 +154,15 @@ class Codebase(BaseModel):
     entry_point: str | None = None
     files: list[CodeFile]
     setup_instructions: str = ""
+
+    @field_validator("setup_instructions", mode="before")
+    @classmethod
+    def _coerce_setup_instructions(cls, v: object) -> str:
+        if v is None:
+            return ""
+        if isinstance(v, list):
+            return "\n".join(str(line) for line in v)
+        return str(v)
 
 
 class BugInjectionBrief(BaseModel):

@@ -66,7 +66,16 @@ async def run(golden: Codebase, brief: BugInjectionBrief) -> Codebase:
         log.warning("bug_injector: falling back to golden codebase (no bugs injected)")
         return golden
 
-    files = [CodeFile(**f) for f in files_raw]
+    golden_by_path = {f.path: f for f in golden.files}
+    files: list[CodeFile] = []
+    for item in files_raw:
+        if not isinstance(item, dict):
+            continue
+        path = item.get("path") or item.get("file_path")
+        fallback = golden_by_path.get(str(path)) if path else None
+        parsed = CodeFile.from_llm(item, fallback=fallback)
+        if parsed and parsed.path:
+            files.append(parsed)
 
     # Merge: keep golden content for files the injector didn't touch or truncated away
     injected_paths = {f.path for f in files}

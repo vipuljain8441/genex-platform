@@ -3,6 +3,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -104,6 +105,15 @@ export function Workspace({
   const isCodingChallenge = activeChallenge?.kind === "coding";
   const allChallengesComplete = challenges.every((c) => responses[c.id]?.status === "completed");
   const completedCount = challenges.filter((c) => responses[c.id]?.status === "completed").length;
+  const submitTooltip = useMemo(() => {
+    if (submitting) {
+      return "Submitting your assessment…";
+    }
+    if (allChallengesComplete) {
+      return "Submit the full assessment for review.";
+    }
+    return `Submit your assessment (${completedCount}/${challenges.length} challenges marked complete). You can submit anytime.`;
+  }, [submitting, allChallengesComplete, completedCount, challenges.length]);
   const buddyDisabled = activeChallenge ? !activeChallenge.allow_buddy : false;
 
   const mm = Math.floor(elapsed / 60).toString().padStart(2, "0");
@@ -270,10 +280,6 @@ export function Workspace({
 
   // ── Submit ──────────────────────────────────────────────────────────────────
   async function submit() {
-    if (!allChallengesComplete) {
-      alert("Please complete every challenge before submitting the assessment.");
-      return;
-    }
     setSubmitting(true);
     monitor.event("submit", null, { assessment_id: assessmentId });
     monitor.stop();
@@ -358,9 +364,9 @@ export function Workspace({
 
           <Button
             onClick={submit}
-            disabled={submitting || !allChallengesComplete}
+            disabled={submitting}
             size="sm"
-            title={allChallengesComplete ? "Submit the full assessment" : "Complete every challenge before submitting"}
+            title={submitTooltip}
           >
             {submitting ? <><Loader2 className="h-4 w-4 animate-spin" /> Submitting…</> : <><Send className="h-4 w-4" /> Submit</>}
           </Button>
@@ -551,7 +557,8 @@ export function Workspace({
                         sessionId={sessionId}
                         challengeId={activeChallenge?.id}
                         disabled={buddyDisabled}
-                        disabledReason="Buddy is disabled for this challenge."
+                        disabledReason="Buddy is disabled for theory and objective challenges."
+                        workspace={{}}
                       />
                     )}
                   </div>
