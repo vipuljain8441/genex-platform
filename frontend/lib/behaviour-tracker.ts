@@ -28,6 +28,11 @@ interface TicketTimer {
   aiMs: number;
 }
 
+interface FileOriginState {
+  aiPatchLines: number;
+  pastedLines: number;
+}
+
 const IDLE_THRESHOLD_MS = 15_000;
 const TICK_MS = 5_000;
 const KEYSTROKE_FLUSH_MS = 10_000;
@@ -58,11 +63,13 @@ class BehaviourTracker {
   private ticketTimer: TicketTimer | null = null;
   private lastKeystrokeAt = 0;
   private pendingWindowBlurAt: number | null = null;
+  private fileOrigins: Map<string, FileOriginState> = new Map();
 
   start() {
     if (this.running) return;
     this.running = true;
     this.lastActivityAt = Date.now();
+    this.fileOrigins.clear();
     this.idleTimer = setInterval(() => this.tickIdle(), TICK_MS);
     this.bucketTimer = setInterval(() => this.flushBucket(), KEYSTROKE_FLUSH_MS);
 
@@ -173,8 +180,64 @@ class BehaviourTracker {
       content_hash: contentHash,
       source_type: "clipboard",
     });
+    const existing = this.fileOrigins.get(file) ?? { aiPatchLines: 0, pastedLines: 0 };
+    existing.pastedLines += Math.max(1, Math.ceil(characterCount / 40));
+    this.fileOrigins.set(file, existing);
     this.bucket.special.paste += 1;
     this.markActivity("editor", "content_paste", file);
+  }
+
+  recordAiPatchAccepted(file: string, content: string) {
+    const existing = this.fileOrigins.get(file) ?? { aiPatchLines: 0, pastedLines: 0 };
+    existing.aiPatchLines += Math.max(1, content.split("\n").length);
+    this.fileOrigins.set(file, existing);
+    this.markActivity("ai", "ai_patch_accepted", file);
+  }
+
+  recordContentSnapshot(changes: Array<{
+    file_path: string;
+    added_lines: number;
+    removed_lines: number;
+    changed_ranges: { start_line: number; end_line: number; change_type: string }[];
+    previous_line_count: number;
+    new_line_count: number;
+    char_delta: number;
+  }>) {
+    for (const change of changes) {
+      const totalLines = Math.max(change.new_line_count, change.previous_line_count, 1);
+      const changedLines =
+        change.changed_ranges.reduce(
+          (sum, range) => sum + Math.max(range.end_line - range.start_line + 1, 1),
+          0
+        ) || Math.max(change.added_lines + change.removed_lines, 1);
+      const existing = this.fileOrigins.get(change.file_path) ?? { aiPatchLines: 0, pastedLines: 0 };
+      const aiPatchLines = Math.min(existing.aiPatchLines, changedLines);
+      const pastedLines = Math.min(existing.pastedLines, Math.max(changedLines - aiPatchLines, 0));
+      const manualLines = Math.max(changedLines - aiPatchLines - pastedLines, 0);
+      const unchangedLines = Math.max(totalLines - changedLines, 0);
+      monitor.event("content_delta_snapshot", change.file_path, {
+        file: change.file_path,
+        snapshot_at: new Date().toISOString(),
+        lines_added: change.added_lines,
+        lines_removed: change.removed_lines,
+        net_lines_changed: change.added_lines - change.removed_lines,
+        origin_breakdown: {
+          manual_lines: manualLines,
+          ai_patch_lines: aiPatchLines,
+          pasted_lines: pastedLines,
+          unchanged_lines: unchangedLines,
+        },
+        changed_ranges: change.changed_ranges,
+        previous_line_count: change.previous_line_count,
+        new_line_count: change.new_line_count,
+        char_delta: change.char_delta,
+      });
+      this.fileOrigins.set(change.file_path, {
+        aiPatchLines: Math.max(existing.aiPatchLines - aiPatchLines, 0),
+        pastedLines: Math.max(existing.pastedLines - pastedLines, 0),
+      });
+      this.markActivity("editor", "content_delta_snapshot", change.file_path);
+    }
   }
 
   private onWindowBlur = () => {

@@ -31,6 +31,7 @@ import {
   type ChallengeResponse,
   type ObjectiveQuestion,
 } from "@/lib/api";
+import { behaviourTracker } from "@/lib/behaviour-tracker";
 import { monitor } from "@/lib/monitor";
 import { Logo } from "@/components/ui/Logo";
 import { Button } from "@/components/ui/Button";
@@ -138,13 +139,38 @@ export function Workspace({
   // ── Timer + monitor ─────────────────────────────────────────────────────────
   useEffect(() => {
     monitor.start(sessionId);
+    behaviourTracker.start();
     const startedAt = Date.now();
     const tick = setInterval(
       () => setElapsed(Math.floor((Date.now() - startedAt) / 1000)),
       1000
     );
-    return () => { clearInterval(tick); monitor.stop(); };
+    return () => {
+      clearInterval(tick);
+      behaviourTracker.stop();
+      monitor.stop();
+    };
   }, [sessionId]);
+
+  useEffect(() => {
+    behaviourTracker.setTicket(activeChallengeId);
+  }, [activeChallengeId]);
+
+  useEffect(() => {
+    if (viewMode === "overview") {
+      behaviourTracker.setPanel("tickets");
+      return;
+    }
+    if (buddyPanelState === "expanded") {
+      behaviourTracker.setPanel("ai");
+      return;
+    }
+    if (challengePanelState === "expanded" || !isCodingChallenge) {
+      behaviourTracker.setPanel("tickets");
+      return;
+    }
+    behaviourTracker.setPanel("editor");
+  }, [viewMode, buddyPanelState, challengePanelState, isCodingChallenge]);
 
   // ── Drag resize ─────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -195,7 +221,10 @@ export function Workspace({
     if (viewMode !== "workspace" || !isCodingChallenge || !sandboxUrl) return;
     const interval = setInterval(async () => {
       try {
-        await api.syncSandbox(sessionId);
+        const sync = await api.syncSandbox(sessionId);
+        if (sync.changed_files.length > 0) {
+          behaviourTracker.recordContentSnapshot(sync.changed_files);
+        }
       } catch {}
     }, 12_000);
     return () => clearInterval(interval);
@@ -224,6 +253,10 @@ export function Workspace({
     setActiveChallengeId(challengeId);
     const challenge = challenges.find((c) => c.id === challengeId);
     monitor.event("challenge_switch", null, { challenge_id: challengeId, challenge_kind: challenge?.kind });
+    behaviourTracker.markActivity(
+      challenge?.kind === "coding" ? "editor" : "ticket",
+      "challenge_switch"
+    );
     try { await api.setCurrentChallenge(sessionId, challengeId); } catch {}
     if (challenge?.kind === "coding" && viewMode === "workspace") await ensureSandbox();
   }
@@ -237,6 +270,10 @@ export function Workspace({
     setBuddyPanelState((current) => (current === "closed" ? "expanded" : current));
     setPanelSlidOut(false);
     monitor.event("challenge_switch", null, { challenge_id: challengeId, challenge_kind: challenge.kind });
+    behaviourTracker.markActivity(
+      challenge.kind === "coding" ? "editor" : "ticket",
+      "challenge_switch"
+    );
     try { await api.setCurrentChallenge(sessionId, challengeId); } catch {}
     if (challenge.kind === "coding") await ensureSandbox();
   }
@@ -262,6 +299,7 @@ export function Workspace({
       },
     }));
     monitor.event("challenge_response", null, { challenge_id: challengeId, status });
+    behaviourTracker.markActivity("ticket", "challenge_response");
     void persistChallengeResponse(challengeId, { status });
     void api.commitSandbox(sessionId, `chore: challenge ${challengeId} marked ${status}`).catch(() => {});
   }
@@ -278,6 +316,7 @@ export function Workspace({
     }));
     const existing = responseDebounce.current[challengeId];
     if (existing) clearTimeout(existing);
+    behaviourTracker.markActivity("ticket", "challenge_response");
     responseDebounce.current[challengeId] = setTimeout(() => {
       void persistChallengeResponse(challengeId, { answer_text: value, status: value.trim() ? "in_progress" : "pending" });
     }, 500);
@@ -302,11 +341,14 @@ export function Workspace({
         updated_at: new Date().toISOString(),
       },
     }));
+    behaviourTracker.markActivity("ticket", "challenge_response");
     void persistChallengeResponse(challengeId, { selected_option_ids: nextSelected, status: nextStatus });
   }
 
   // ── SQL runner ──────────────────────────────────────────────────────────────
   async function runSQL(challengeId: string, query: string) {
+    behaviourTracker.setPanel("terminal");
+    behaviourTracker.markActivity("terminal", "terminal_command");
     setSqlResults((prev) => ({ ...prev, [challengeId]: { columns: [], rows: [], rowcount: 0, error: null, running: true } }));
     try {
       const result = await api.runSQL(sessionId, query);
@@ -319,10 +361,17 @@ export function Workspace({
   // ── Submit ──────────────────────────────────────────────────────────────────
   async function submit() {
     setSubmitting(true);
+    behaviourTracker.markActivity("submit", "submit");
     monitor.event("submit", null, { assessment_id: assessmentId });
+    behaviourTracker.stop();
     monitor.stop();
     try { await api.commitSandbox(sessionId, "chore: final submission snapshot"); } catch {}
-    try { await api.syncSandbox(sessionId); } catch {}
+    try {
+      const sync = await api.syncSandbox(sessionId);
+      if (sync.changed_files.length > 0) {
+        behaviourTracker.recordContentSnapshot(sync.changed_files);
+      }
+    } catch {}
     try {
       await api.submit(sessionId);
       router.push(`/candidate/submitted/${sessionId}`);
@@ -356,11 +405,13 @@ export function Workspace({
   function openChallengePanel() {
     setChallengePanelState("expanded");
     setPanelSlidOut(false);
+    behaviourTracker.setPanel("tickets");
   }
 
   function openBuddyPanel() {
     setBuddyPanelState("expanded");
     setPanelSlidOut(false);
+    behaviourTracker.setPanel("ai");
   }
 
   const panelOpen = challengePanelState !== "closed" || buddyPanelState !== "closed";
