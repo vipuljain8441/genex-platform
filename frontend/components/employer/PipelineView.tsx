@@ -7,7 +7,7 @@ import {
   CheckCircle2, Loader2, AlertTriangle, Sparkles, ExternalLink,
 } from "lucide-react";
 import {
-  api, streamAssessment, type Assessment, type PipelineStage,
+  api, streamAssessment, type Assessment, type AssessmentSessionSummary, type PipelineStage,
 } from "@/lib/api";
 import { Button } from "@/components/ui/Button";
 import { Card, CardBody } from "@/components/ui/Card";
@@ -35,6 +35,7 @@ function stageIndex(s: PipelineStage) {
 
 export function PipelineView({ initial }: { initial: Assessment }) {
   const [a, setA] = useState<Assessment>(initial);
+  const [sessions, setSessions] = useState<AssessmentSessionSummary[]>([]);
 
   useEffect(() => {
     const close = streamAssessment(initial.id, setA);
@@ -43,6 +44,23 @@ export function PipelineView({ initial }: { initial: Assessment }) {
     }, 4000);
     return () => { close(); clearInterval(poll); };
   }, [initial.id]);
+
+  useEffect(() => {
+    if (a.status.stage !== "ready") return;
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const data = await api.listAssessmentSessions(initial.id);
+        if (!cancelled) setSessions(data);
+      } catch {}
+    };
+    load();
+    const poll = setInterval(load, 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(poll);
+    };
+  }, [a.status.stage, initial.id]);
 
   const cur = a.status.stage;
   const failed = cur === "failed";
@@ -229,6 +247,61 @@ export function PipelineView({ initial }: { initial: Assessment }) {
                   </li>
                 ))}
               </ul>
+            </CardBody>
+          </Card>
+        </motion.div>
+      )}
+
+      {ready && (
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+        >
+          <Card>
+            <CardBody>
+              <div className="flex items-center justify-between gap-3 flex-wrap">
+                <div>
+                  <div className="text-xs uppercase tracking-[0.22em] text-bone/40">
+                    Candidate sessions
+                  </div>
+                  <p className="mt-2 text-sm text-bone/60">
+                    Employer-only access to submitted sessions and reports for this assessment.
+                  </p>
+                </div>
+                <Badge>{sessions.length} session{sessions.length !== 1 ? "s" : ""}</Badge>
+              </div>
+              <div className="mt-4 space-y-3">
+                {sessions.length === 0 ? (
+                  <div className="rounded-xl border border-black/[0.06] bg-black/[0.02] px-4 py-5 text-sm text-bone/50">
+                    No candidates have started this assessment yet.
+                  </div>
+                ) : sessions.map((session) => (
+                  <div
+                    key={session.session_id}
+                    className="rounded-xl border border-black/[0.06] bg-black/[0.02] px-4 py-3"
+                  >
+                    <div className="flex items-start justify-between gap-3 flex-wrap">
+                      <div>
+                        <div className="font-medium text-bone">{session.candidate_name}</div>
+                        <div className="mt-1 text-xs text-bone/45 font-mono">{session.session_id}</div>
+                        <div className="mt-2 text-xs text-bone/50">
+                          Started {new Date(session.started_at).toLocaleString()}
+                          {session.submitted_at ? ` · Submitted ${new Date(session.submitted_at).toLocaleString()}` : " · In progress"}
+                        </div>
+                      </div>
+                      {session.has_evaluation ? (
+                        <Link href={session.report_url}>
+                          <Button size="sm" variant="outline">
+                            Open report
+                          </Button>
+                        </Link>
+                      ) : (
+                        <Badge tone="violet">Evaluating / active</Badge>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
             </CardBody>
           </Card>
         </motion.div>

@@ -170,6 +170,67 @@ export type CodeReview = {
   info_count: number;
 };
 
+export type FileLineRange = {
+  start_line: number;
+  end_line: number;
+  change_type: string;
+};
+
+export type FileActivitySummary = {
+  file_path: string;
+  active_seconds: number;
+  total_events: number;
+  edit_events: number;
+  line_ranges: FileLineRange[];
+  first_at: string | null;
+  last_at: string | null;
+};
+
+export type ActivityTraceEntry = {
+  at: string;
+  kind: string;
+  file_path: string | null;
+  line_start: number | null;
+  line_end: number | null;
+  summary: string;
+};
+
+export type ActivityForensics = {
+  total_events: number;
+  tracked_files: number;
+  file_summaries: FileActivitySummary[];
+  recent_entries: ActivityTraceEntry[];
+};
+
+export type BuddyTranscriptEntry = {
+  at: string;
+  role: string;
+  content: string;
+  challenge_id: string | null;
+  open_file: string | null;
+  blocked: boolean;
+  hint_level: string | null;
+  edit_targets: string[];
+};
+
+export type BuddyEditAction = {
+  at: string;
+  action: string;
+  file_path: string | null;
+  challenge_id: string | null;
+  rationale: string;
+};
+
+export type BuddyAudit = {
+  total_messages: number;
+  blocked_messages: number;
+  proposed_edits: number;
+  applied_edits: number;
+  dismissed_edits: number;
+  transcript: BuddyTranscriptEntry[];
+  actions: BuddyEditAction[];
+};
+
 // ── Section 7a–7f: Behavioural analytics ────────────────────────────────────
 // Mirrors backend services/behaviour.py.
 
@@ -298,6 +359,8 @@ export type ReportData = {
   integrity: IntegritySignals;
   strategy: StrategyAnswer[];
   code_review: CodeReview | null;
+  activity_forensics: ActivityForensics;
+  buddy_audit: BuddyAudit;
   playback_url: string;
   heatmap: Heatmap;
 };

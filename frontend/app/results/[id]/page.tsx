@@ -22,6 +22,8 @@ import { PanelFlow } from "@/components/report/PanelFlow";
 import { IntegrityPanel } from "@/components/report/IntegrityPanel";
 import { StrategyAnswers } from "@/components/report/StrategyAnswers";
 import { CodeReviewPanel } from "@/components/report/CodeReviewPanel";
+import { ActivityForensicsPanel } from "@/components/report/ActivityForensicsPanel";
+import { BuddyAuditPanel } from "@/components/report/BuddyAuditPanel";
 import { PlaybackCTA } from "@/components/report/PlaybackCTA";
 import { api } from "@/lib/api";
 import type { ReportData } from "@/lib/report-types";
@@ -152,6 +154,12 @@ export default function ResultsPage() {
 
           {/* Section 10 — Code review */}
           <CodeReviewPanel review={report.code_review} />
+
+          {/* Section 11 — Detailed activity trace */}
+          <ActivityForensicsPanel data={report.activity_forensics} />
+
+          {/* Section 12 — Buddy audit */}
+          <BuddyAuditPanel audit={report.buddy_audit} />
 
           {/* Shadow playback CTA */}
           <PlaybackCTA url={report.playback_url} />

@@ -175,6 +175,67 @@ class CodeReview(TypedDict):
     info_count: int
 
 
+class FileLineRange(TypedDict):
+    start_line: int
+    end_line: int
+    change_type: str
+
+
+class FileActivitySummary(TypedDict):
+    file_path: str
+    active_seconds: int
+    total_events: int
+    edit_events: int
+    line_ranges: list[FileLineRange]
+    first_at: str | None
+    last_at: str | None
+
+
+class ActivityTraceEntry(TypedDict):
+    at: str
+    kind: str
+    file_path: str | None
+    line_start: int | None
+    line_end: int | None
+    summary: str
+
+
+class ActivityForensics(TypedDict):
+    total_events: int
+    tracked_files: int
+    file_summaries: list[FileActivitySummary]
+    recent_entries: list[ActivityTraceEntry]
+
+
+class BuddyTranscriptEntry(TypedDict):
+    at: str
+    role: str
+    content: str
+    challenge_id: str | None
+    open_file: str | None
+    blocked: bool
+    hint_level: str | None
+    edit_targets: list[str]
+
+
+class BuddyEditAction(TypedDict):
+    at: str
+    action: str
+    file_path: str | None
+    challenge_id: str | None
+    rationale: str
+
+
+class BuddyAudit(TypedDict):
+    total_messages: int
+    blocked_messages: int
+    proposed_edits: int
+    applied_edits: int
+    dismissed_edits: int
+    transcript: list[BuddyTranscriptEntry]
+    actions: list[BuddyEditAction]
+
+
 class ReportData(TypedDict):
     available: bool  # false until evaluation exists
     header: CandidateHeader
@@ -187,6 +248,8 @@ class ReportData(TypedDict):
     integrity: IntegritySignals
     strategy: list[StrategyAnswer]
     code_review: CodeReview | None
+    activity_forensics: ActivityForensics
+    buddy_audit: BuddyAudit
     playback_url: str
     heatmap: Heatmap
 
@@ -224,6 +287,16 @@ def _classify_prompt(content: str, is_followup: bool) -> list[str]:
 
 def _seconds(a: datetime, b: datetime) -> float:
     return (b - a).total_seconds()
+
+
+def _safe_int(value: object) -> int | None:
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    return None
 
 
 def _minutes_used(session: CandidateSession) -> int | None:
@@ -438,39 +511,25 @@ def _build_ai_interaction(
         prompts.append(PromptEntry(
             at=t.at.isoformat(),
             content=t.content,
-            file_context=None,
+            file_context=t.open_file,
             tags=tags,
         ))
         seen_count += 1
 
     buddy_hint_events = [e for e in events if e.kind.value == "buddy_hint"]
+    buddy_action_events = [e for e in events if e.kind.value == "buddy_edit_action"]
     proposed = len(buddy_hint_events)
-    # No structured patch-accept/reject events yet — leave accepted/rejected at 0
-    # unless we find indicators in event payloads. Many sessions will have
-    # accepted patches inferred from edits that closely follow a buddy_hint.
-    accepted = 0
-    rejected = 0
-    edits_after_accept = 0
-    for e in buddy_hint_events:
-        if isinstance(e.payload, dict):
-            if e.payload.get("applied") is True:
-                accepted += 1
-            elif e.payload.get("dismissed") is True:
-                rejected += 1
-    if accepted == 0 and rejected == 0 and proposed > 0:
-        # Conservative inference — count edits within 60s after each hint as
-        # accepted application.
-        edits_sorted = sorted(
-            (e for e in events if e.kind.value == "edit"),
-            key=lambda e: e.at,
-        )
-        for hint in buddy_hint_events:
-            for ed in edits_sorted:
-                if 0 <= _seconds(hint.at, ed.at) <= 60:
-                    accepted += 1
-                    edits_after_accept += 1
-                    break
-        rejected = max(proposed - accepted, 0)
+    accepted = sum(
+        1
+        for event in buddy_action_events
+        if isinstance(event.payload, dict) and event.payload.get("action") == "applied"
+    )
+    rejected = sum(
+        1
+        for event in buddy_action_events
+        if isinstance(event.payload, dict) and event.payload.get("action") == "dismissed"
+    )
+    edits_after_accept = accepted
 
     blind_paste_rate = 0.0
     if proposed > 0:
@@ -495,6 +554,187 @@ def _build_ai_interaction(
         edits_after_accept=edits_after_accept,
         trap=trap,
         model_used=model_used,
+    )
+
+
+def _extract_line_ranges(payload: dict) -> list[FileLineRange]:
+    direct_start = _safe_int(payload.get("line_start"))
+    direct_end = _safe_int(payload.get("line_end"))
+    if direct_start is not None:
+        return [FileLineRange(
+            start_line=direct_start,
+            end_line=direct_end or direct_start,
+            change_type=str(payload.get("change_type") or "observed"),
+        )]
+    changed_ranges = payload.get("changed_ranges")
+    if not isinstance(changed_ranges, list):
+        return []
+    out: list[FileLineRange] = []
+    for item in changed_ranges:
+        if not isinstance(item, dict):
+            continue
+        start_line = _safe_int(item.get("start_line"))
+        end_line = _safe_int(item.get("end_line"))
+        if start_line is None:
+            continue
+        out.append(FileLineRange(
+            start_line=start_line,
+            end_line=end_line or start_line,
+            change_type=str(item.get("change_type") or "observed"),
+        ))
+    return out
+
+
+def _describe_event(event: ActivityEvent) -> str:
+    payload = event.payload if isinstance(event.payload, dict) else {}
+    if event.kind.value == "code_sync":
+        added = _safe_int(payload.get("added_lines")) or 0
+        removed = _safe_int(payload.get("removed_lines")) or 0
+        ranges = _extract_line_ranges(payload)
+        if ranges:
+            segments = ", ".join(f"L{r['start_line']}-{r['end_line']}" for r in ranges[:3])
+            return f"Sandbox sync observed {added} added / {removed} removed lines in {segments}."
+        return f"Sandbox sync observed {added} added / {removed} removed lines."
+    if event.kind.value == "buddy_edit_action":
+        return f"Buddy suggestion {payload.get('action') or 'reviewed'}."
+    if event.kind.value == "buddy_query":
+        return f"Asked Buddy ({payload.get('question_len') or 0} chars)."
+    if event.kind.value == "buddy_hint":
+        return f"Buddy responded with {payload.get('hint_level') or 'hint'}."
+    if event.kind.value == "challenge_response":
+        return f"Challenge response {payload.get('status') or 'updated'}."
+    if event.kind.value == "terminal_command":
+        command = str(payload.get("command") or "").strip()
+        return f"Ran terminal command `{command[:60]}`." if command else "Ran terminal command."
+    if event.kind.value == "run":
+        return "Executed the current file."
+    if event.kind.value == "edit":
+        delta = _safe_int(payload.get("delta_chars"))
+        if delta is not None:
+            return f"Typed or deleted approximately {abs(delta)} characters."
+    return event.kind.value.replace("_", " ").title()
+
+
+def _build_activity_forensics(events: list[ActivityEvent]) -> ActivityForensics:
+    sorted_events = sorted(events, key=lambda e: e.at)
+    file_stats: dict[str, dict[str, object]] = {}
+    for idx, event in enumerate(sorted_events):
+        if not event.file_path:
+            continue
+        stat = file_stats.setdefault(
+            event.file_path,
+            {
+                "active_seconds": 0,
+                "total_events": 0,
+                "edit_events": 0,
+                "line_ranges": [],
+                "first_at": event.at,
+                "last_at": event.at,
+            },
+        )
+        stat["total_events"] = int(stat["total_events"]) + 1
+        if event.kind.value in {"edit", "code_sync"}:
+            stat["edit_events"] = int(stat["edit_events"]) + 1
+        stat["last_at"] = event.at
+        ranges = _extract_line_ranges(event.payload if isinstance(event.payload, dict) else {})
+        existing = stat["line_ranges"]
+        if isinstance(existing, list):
+            existing.extend(ranges)
+        if idx + 1 < len(sorted_events):
+            next_event = sorted_events[idx + 1]
+            gap = max(0, min(int(_seconds(event.at, next_event.at)), 90))
+            stat["active_seconds"] = int(stat["active_seconds"]) + gap
+
+    file_summaries: list[FileActivitySummary] = []
+    for file_path, stat in file_stats.items():
+        raw_ranges = stat["line_ranges"] if isinstance(stat["line_ranges"], list) else []
+        deduped: list[FileLineRange] = []
+        seen: set[tuple[int, int, str]] = set()
+        for item in raw_ranges:
+            if not isinstance(item, dict):
+                continue
+            signature = (
+                int(item["start_line"]),
+                int(item["end_line"]),
+                str(item["change_type"]),
+            )
+            if signature in seen:
+                continue
+            seen.add(signature)
+            deduped.append(FileLineRange(
+                start_line=signature[0],
+                end_line=signature[1],
+                change_type=signature[2],
+            ))
+        file_summaries.append(FileActivitySummary(
+            file_path=file_path,
+            active_seconds=int(stat["active_seconds"]),
+            total_events=int(stat["total_events"]),
+            edit_events=int(stat["edit_events"]),
+            line_ranges=deduped[:12],
+            first_at=stat["first_at"].isoformat() if isinstance(stat["first_at"], datetime) else None,
+            last_at=stat["last_at"].isoformat() if isinstance(stat["last_at"], datetime) else None,
+        ))
+    file_summaries.sort(key=lambda item: (-item["active_seconds"], -item["total_events"], item["file_path"]))
+
+    recent_entries: list[ActivityTraceEntry] = []
+    for event in sorted_events[-80:]:
+        ranges = _extract_line_ranges(event.payload if isinstance(event.payload, dict) else {})
+        line_start = ranges[0]["start_line"] if ranges else _safe_int((event.payload or {}).get("line_start"))
+        line_end = ranges[0]["end_line"] if ranges else _safe_int((event.payload or {}).get("line_end"))
+        recent_entries.append(ActivityTraceEntry(
+            at=event.at.isoformat(),
+            kind=event.kind.value,
+            file_path=event.file_path,
+            line_start=line_start,
+            line_end=line_end,
+            summary=_describe_event(event),
+        ))
+
+    return ActivityForensics(
+        total_events=len(sorted_events),
+        tracked_files=len(file_summaries),
+        file_summaries=file_summaries,
+        recent_entries=recent_entries,
+    )
+
+
+def _build_buddy_audit(
+    buddy_history: list[BuddyTurn],
+    events: list[ActivityEvent],
+) -> BuddyAudit:
+    transcript = [
+        BuddyTranscriptEntry(
+            at=turn.at.isoformat(),
+            role=turn.role,
+            content=turn.content,
+            challenge_id=turn.challenge_id,
+            open_file=turn.open_file,
+            blocked=turn.blocked,
+            hint_level=turn.hint_level,
+            edit_targets=[edit.file_path for edit in turn.edits],
+        )
+        for turn in buddy_history
+    ]
+    action_events = [event for event in events if event.kind.value == "buddy_edit_action"]
+    actions = [
+        BuddyEditAction(
+            at=event.at.isoformat(),
+            action=str((event.payload or {}).get("action") or "reviewed"),
+            file_path=event.file_path,
+            challenge_id=str((event.payload or {}).get("challenge_id") or "") or None,
+            rationale=str((event.payload or {}).get("rationale") or ""),
+        )
+        for event in action_events
+    ]
+    return BuddyAudit(
+        total_messages=len(buddy_history),
+        blocked_messages=sum(1 for turn in buddy_history if turn.blocked),
+        proposed_edits=sum(len(turn.edits) for turn in buddy_history if turn.role == "buddy"),
+        applied_edits=sum(1 for action in actions if action["action"] == "applied"),
+        dismissed_edits=sum(1 for action in actions if action["action"] == "dismissed"),
+        transcript=transcript,
+        actions=actions,
     )
 
 
@@ -694,6 +934,8 @@ def build_report(
     integrity = _build_integrity(events)
     strategy: list[StrategyAnswer] = []  # No strategy questions in the data model yet
     code_review = _build_code_review(evaluation)
+    activity_forensics = _build_activity_forensics(events)
+    buddy_audit = _build_buddy_audit(buddy_history, events)
 
     return ReportData(
         available=evaluation is not None,
@@ -707,6 +949,8 @@ def build_report(
         integrity=integrity,
         strategy=strategy,
         code_review=code_review,
+        activity_forensics=activity_forensics,
+        buddy_audit=buddy_audit,
         playback_url=f"/playback/{session.id}",
         heatmap=heatmap,
     )

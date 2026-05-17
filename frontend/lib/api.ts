@@ -33,6 +33,16 @@ export type ActivityEventInput = {
   payload?: Record<string, unknown>;
 };
 
+export type AssessmentSessionSummary = {
+  session_id: string;
+  candidate_name: string;
+  started_at: string;
+  submitted_at: string | null;
+  current_challenge_id: string | null;
+  has_evaluation: boolean;
+  report_url: string;
+};
+
 // ── Employer ────────────────────────────────────────────────────────────────
 export type RoleFamily =
   | "backend" | "frontend" | "fullstack"
@@ -230,6 +240,8 @@ export const api = {
     http<Assessment>(`/api/employer/assessments/${id}`),
   listAssessments: () =>
     http<Assessment[]>("/api/employer/assessments"),
+  listAssessmentSessions: (id: string) =>
+    http<AssessmentSessionSummary[]>(`/api/employer/assessments/${id}/sessions`),
 
   startSession: (assessment_id: string, candidate_name: string) =>
     http<{ session: CandidateSessionView; assessment: Assessment }>(
@@ -322,7 +334,18 @@ export const api = {
       method: "POST",
     }),
   syncSandbox: (sessionId: string) =>
-    http<{ synced: number }>(`/api/sandbox/sync/${sessionId}`, { method: "POST" }),
+    http<{
+      synced: number;
+      changed_files: {
+        file_path: string;
+        added_lines: number;
+        removed_lines: number;
+        changed_ranges: { start_line: number; end_line: number; change_type: string }[];
+        previous_line_count: number;
+        new_line_count: number;
+        char_delta: number;
+      }[];
+    }>(`/api/sandbox/sync/${sessionId}`, { method: "POST" }),
   commitSandbox: (sessionId: string, message?: string) =>
     http<{ committed: boolean; session_id: string }>(
       `/api/sandbox/commit/${sessionId}${message ? `?message=${encodeURIComponent(message)}` : ""}`,

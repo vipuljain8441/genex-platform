@@ -176,6 +176,18 @@ class PostgresStore:
             return None
         return CandidateSession(**_load(row["data"]))
 
+    async def list_sessions_for_assessment(self, assessment_id: str) -> list[CandidateSession]:
+        pool = self._require_pool()
+        rows = await pool.fetch(
+            """
+            select data from sessions
+            where assessment_id = $1
+            order by started_at desc
+            """,
+            assessment_id,
+        )
+        return [CandidateSession(**_load(row["data"])) for row in rows]
+
     # ── Events ────────────────────────────────────────────────────────────
     async def append_event(self, event: ActivityEvent) -> None:
         pool = self._require_pool()

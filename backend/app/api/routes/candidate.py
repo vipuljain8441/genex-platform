@@ -200,6 +200,8 @@ async def submit(session_id: str) -> SubmitOut:
     if not assessment or not assessment.candidate_ticket or not assessment.golden_codebase:
         raise HTTPException(500, "assessment incomplete")
 
+    session.submitted_at = datetime.now(timezone.utc)
+    await store.put_session(session)
     await store.append_event(ActivityEvent(session_id=session.id, kind=EventKind.SUBMIT))
     result = await evaluator.run(
         job=assessment.job,

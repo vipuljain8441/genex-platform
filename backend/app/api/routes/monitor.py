@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 
 from app.models.schemas import ActivityEvent, EventKind
 from app.store import store
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/monitor", tags=["monitor"])
@@ -17,7 +17,7 @@ class EventIn(BaseModel):
     session_id: str
     kind: EventKind
     file_path: str | None = None
-    payload: dict = {}
+    payload: dict = Field(default_factory=dict)
 
 
 class EventBatchIn(BaseModel):

@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException
 from app.agents import buddy as buddy_agent
 from app.models.schemas import (
     ActivityEvent,
+    BuddyEditTrace,
     BuddyRequest,
     BuddyResponse,
     BuddyTurn,
@@ -39,7 +40,17 @@ async def ask_buddy(req: BuddyRequest) -> BuddyResponse:
     enriched = BuddyRequest(**{**req.model_dump(), "history": history})
 
     await store.append_buddy_turn(
-        req.session_id, BuddyTurn(role="user", content=req.question)
+        req.session_id,
+        BuddyTurn(
+            role="user",
+            content=req.question,
+            challenge_id=challenge_id,
+            open_file=req.open_file,
+            selection=req.selection,
+            metadata={
+                "workspace_file_count": len(req.workspace or {}),
+            },
+        ),
     )
     await store.append_event(
         ActivityEvent(
@@ -66,7 +77,16 @@ async def ask_buddy(req: BuddyRequest) -> BuddyResponse:
         )
         await store.append_buddy_turn(
             req.session_id,
-            BuddyTurn(role="buddy", content=response.hint, at=datetime.now(timezone.utc)),
+            BuddyTurn(
+                role="buddy",
+                content=response.hint,
+                at=datetime.now(timezone.utc),
+                challenge_id=challenge_id,
+                open_file=req.open_file,
+                blocked=response.blocked,
+                hint_level=response.hint_level,
+                edits=[],
+            ),
         )
         await store.append_event(
             ActivityEvent(
@@ -77,6 +97,7 @@ async def ask_buddy(req: BuddyRequest) -> BuddyResponse:
                     "hint_level": response.hint_level,
                     "blocked": response.blocked,
                     "challenge_id": challenge_id,
+                    "edit_count": 0,
                 },
             )
         )
@@ -90,7 +111,26 @@ async def ask_buddy(req: BuddyRequest) -> BuddyResponse:
 
     await store.append_buddy_turn(
         req.session_id,
-        BuddyTurn(role="buddy", content=response.hint, at=datetime.now(timezone.utc)),
+        BuddyTurn(
+            role="buddy",
+            content=response.hint,
+            at=datetime.now(timezone.utc),
+            challenge_id=challenge_id,
+            open_file=req.open_file,
+            blocked=response.blocked,
+            hint_level=response.hint_level,
+            edits=[
+                BuddyEditTrace(
+                    file_path=edit.file_path,
+                    rationale=edit.rationale,
+                    new_content=edit.new_content,
+                )
+                for edit in response.edits
+            ],
+            metadata={
+                "selection_length": len(req.selection or ""),
+            },
+        ),
     )
     await store.append_event(
         ActivityEvent(
@@ -101,6 +141,8 @@ async def ask_buddy(req: BuddyRequest) -> BuddyResponse:
                 "hint_level": response.hint_level,
                 "blocked": response.blocked,
                 "challenge_id": challenge_id,
+                "edit_count": len(response.edits),
+                "edit_targets": [edit.file_path for edit in response.edits],
             },
         )
     )

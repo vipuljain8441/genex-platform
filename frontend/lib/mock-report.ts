@@ -132,6 +132,72 @@ export const MOCK_REPORT: ReportData = {
     warning_count: 2,
     info_count: 2,
   },
+  activity_forensics: {
+    total_events: 184,
+    tracked_files: 4,
+    file_summaries: [
+      {
+        file_path: "src/payments/refund.ts",
+        active_seconds: 1420,
+        total_events: 48,
+        edit_events: 16,
+        line_ranges: [
+          { start_line: 34, end_line: 61, change_type: "replace" },
+          { start_line: 118, end_line: 142, change_type: "insert" },
+        ],
+        first_at: "2026-05-17T09:04:08Z",
+        last_at: "2026-05-17T10:09:44Z",
+      },
+    ],
+    recent_entries: [
+      {
+        at: "2026-05-17T10:09:44Z",
+        kind: "code_sync",
+        file_path: "src/payments/refund.ts",
+        line_start: 118,
+        line_end: 142,
+        summary: "Sandbox sync observed 14 added / 2 removed lines in L118-142.",
+      },
+    ],
+  },
+  buddy_audit: {
+    total_messages: 10,
+    blocked_messages: 0,
+    proposed_edits: 4,
+    applied_edits: 3,
+    dismissed_edits: 1,
+    transcript: [
+      {
+        at: "2026-05-17T09:04:11Z",
+        role: "user",
+        content: "Explain how the refund retry queue is wired.",
+        challenge_id: "CHL_demo_1",
+        open_file: "src/payments/refund.ts",
+        blocked: false,
+        hint_level: null,
+        edit_targets: [],
+      },
+      {
+        at: "2026-05-17T09:04:19Z",
+        role: "buddy",
+        content: "Start at the API handler, then follow the enqueue helper into the worker.",
+        challenge_id: "CHL_demo_1",
+        open_file: "src/payments/refund.ts",
+        blocked: false,
+        hint_level: "guide",
+        edit_targets: ["src/payments/refund.ts"],
+      },
+    ],
+    actions: [
+      {
+        at: "2026-05-17T09:29:40Z",
+        action: "applied",
+        file_path: "src/payments/refund.ts",
+        challenge_id: "CHL_demo_1",
+        rationale: "Added a null guard before metadata access.",
+      },
+    ],
+  },
   playback_url: "#",
   behaviour_analytics: {
     per_ticket: [

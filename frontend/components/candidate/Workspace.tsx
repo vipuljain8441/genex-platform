@@ -191,6 +191,16 @@ export function Workspace({
     return () => clearInterval(interval);
   }, [viewMode, sandboxUrl, sessionId]);
 
+  useEffect(() => {
+    if (viewMode !== "workspace" || !isCodingChallenge || !sandboxUrl) return;
+    const interval = setInterval(async () => {
+      try {
+        await api.syncSandbox(sessionId);
+      } catch {}
+    }, 12_000);
+    return () => clearInterval(interval);
+  }, [viewMode, isCodingChallenge, sandboxUrl, sessionId]);
+
   // ── Sandbox ─────────────────────────────────────────────────────────────────
   const ensureSandbox = useCallback(async () => {
     if (sandboxProvisioned.current) return;
@@ -315,7 +325,7 @@ export function Workspace({
     try { await api.syncSandbox(sessionId); } catch {}
     try {
       await api.submit(sessionId);
-      router.push(`/results/${sessionId}`);
+      router.push(`/candidate/submitted/${sessionId}`);
     } catch (e: any) {
       alert(`Submit failed: ${e.message}`);
       monitor.start(sessionId);
@@ -697,6 +707,21 @@ export function Workspace({
                           challengeId={activeChallenge?.id}
                           disabled={buddyDisabled}
                           disabledReason="Buddy is disabled for this challenge."
+                          onApplyEdit={(filePath, newContent, rationale) => {
+                            monitor.event("buddy_edit_action", filePath, {
+                              action: "applied",
+                              challenge_id: activeChallenge?.id,
+                              rationale,
+                              content_length: newContent.length,
+                            });
+                          }}
+                          onDismissEdit={(filePath, rationale) => {
+                            monitor.event("buddy_edit_action", filePath, {
+                              action: "dismissed",
+                              challenge_id: activeChallenge?.id,
+                              rationale,
+                            });
+                          }}
                           showHeader={false}
                         />
                       </div>

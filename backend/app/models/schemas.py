@@ -334,6 +334,7 @@ class EventKind(str, Enum):
     FILE_OPEN = "file_open"
     FILE_SWITCH = "file_switch"
     FILE_CLOSE = "file_close"
+    CODE_SYNC = "code_sync"
     CHALLENGE_SWITCH = "challenge_switch"
     CHALLENGE_RESPONSE = "challenge_response"
     PANEL_SWITCH = "panel_switch"
@@ -350,6 +351,7 @@ class EventKind(str, Enum):
     RUN = "run"
     BUDDY_QUERY = "buddy_query"
     BUDDY_HINT = "buddy_hint"
+    BUDDY_EDIT_ACTION = "buddy_edit_action"
     IDLE = "idle"
     SUBMIT = "submit"
     # Behavioural tracking (see services/behaviour.py).
@@ -380,10 +382,24 @@ class ActivityEvent(BaseModel):
 
 # ── Buddy ─────────────────────────────────────────────────────────────────────
 
+class BuddyEditTrace(BaseModel):
+    file_path: str
+    rationale: str = ""
+    new_content: str = ""
+    status: Literal["proposed", "applied", "dismissed"] = "proposed"
+
+
 class BuddyTurn(BaseModel):
     role: Literal["user", "buddy"]
     content: str
     at: datetime = Field(default_factory=_now)
+    challenge_id: str | None = None
+    open_file: str | None = None
+    selection: str | None = None
+    blocked: bool = False
+    hint_level: Literal["nudge", "guide", "concrete"] | None = None
+    edits: list[BuddyEditTrace] = Field(default_factory=list)
+    metadata: dict = Field(default_factory=dict)
 
 
 class BuddyRequest(BaseModel):

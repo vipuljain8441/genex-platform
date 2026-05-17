@@ -55,6 +55,12 @@ class MemoryStore:
     async def get_session(self, session_id: str) -> CandidateSession | None:
         return self.sessions.get(session_id)
 
+    async def list_sessions_for_assessment(self, assessment_id: str) -> list[CandidateSession]:
+        return [
+            session for session in self.sessions.values()
+            if session.assessment_id == assessment_id
+        ]
+
     # ── Events ────────────────────────────────────────────────────────────
     async def append_event(self, event: ActivityEvent) -> None:
         self.events[event.session_id].append(event)

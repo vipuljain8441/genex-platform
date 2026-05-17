@@ -199,6 +199,16 @@ class GitHubInfoOut(BaseModel):
     issues: list[dict]
 
 
+class CandidateSessionSummaryOut(BaseModel):
+    session_id: str
+    candidate_name: str
+    started_at: str
+    submitted_at: str | None
+    current_challenge_id: str | None
+    has_evaluation: bool
+    report_url: str
+
+
 class GitHubValidateIn(BaseModel):
     repo_url: str
 
@@ -260,6 +270,29 @@ async def get_assessment(assessment_id: str) -> Assessment:
     if not a:
         raise HTTPException(404, "assessment not found")
     return a
+
+
+@router.get("/assessments/{assessment_id}/sessions", response_model=list[CandidateSessionSummaryOut])
+async def list_assessment_sessions(assessment_id: str) -> list[CandidateSessionSummaryOut]:
+    assessment = await store.get_assessment(assessment_id)
+    if not assessment:
+        raise HTTPException(404, "assessment not found")
+    sessions = await store.list_sessions_for_assessment(assessment_id)
+    out: list[CandidateSessionSummaryOut] = []
+    for session in sessions:
+        evaluation = await store.get_evaluation(session.id)
+        out.append(
+            CandidateSessionSummaryOut(
+                session_id=session.id,
+                candidate_name=session.candidate_name or "Candidate",
+                started_at=session.started_at.isoformat(),
+                submitted_at=session.submitted_at.isoformat() if session.submitted_at else None,
+                current_challenge_id=session.current_challenge_id,
+                has_evaluation=evaluation is not None,
+                report_url=f"/results/{session.id}",
+            )
+        )
+    return out
 
 
 @router.websocket("/assessments/{assessment_id}/stream")
