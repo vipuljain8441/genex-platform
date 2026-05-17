@@ -39,6 +39,7 @@ export function BuddyChat({
   workspace,
   onApplyEdit,
   onDismissEdit,
+  showHeader = true,
 }: {
   sessionId: string;
   challengeId?: string | null;
@@ -49,6 +50,7 @@ export function BuddyChat({
   workspace?: Record<string, string>;
   onApplyEdit?: (filePath: string, newContent: string, rationale: string) => void;
   onDismissEdit?: (filePath: string, rationale: string) => void;
+  showHeader?: boolean;
 }) {
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [q, setQ] = useState("");
@@ -151,18 +153,20 @@ export function BuddyChat({
   }
 
   return (
-    <div className="h-full flex flex-col">
-      <div className="px-4 py-3 border-b border-black/[0.06] flex items-center gap-2">
-        <div className="relative h-7 w-7 rounded-lg bg-gradient-to-br from-accent to-sky grid place-items-center">
-          <Sparkles className="h-3.5 w-3.5 text-white" />
-        </div>
-        <div>
-          <div className="text-sm font-medium">Buddy</div>
-          <div className="text-[10px] uppercase tracking-wider text-bone/40">
-            Mentor · guides first · you apply edits
+    <div className="h-full flex flex-col bg-[linear-gradient(180deg,_rgba(252,254,255,0.96)_0%,_rgba(239,246,255,0.94)_100%)]">
+      {showHeader && (
+        <div className="px-4 py-3 border-b border-[#cadef3] flex items-center gap-2 bg-[linear-gradient(180deg,_rgba(255,255,255,0.94)_0%,_rgba(242,249,255,0.86)_100%)]">
+          <div className="relative h-7 w-7 rounded-lg bg-gradient-to-br from-accent to-sky grid place-items-center">
+            <Sparkles className="h-3.5 w-3.5 text-white" />
+          </div>
+          <div>
+            <div className="text-sm font-medium">Buddy</div>
+            <div className="text-[10px] uppercase tracking-wider text-bone/40">
+              Helpful · review before you apply
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
       <div ref={scroll} className="flex-1 overflow-y-auto scrollbar-thin p-4 space-y-3">
         {msgs.length === 0 && (
@@ -181,8 +185,8 @@ export function BuddyChat({
               className={cn(
                 "max-w-[92%] rounded-2xl px-3.5 py-2.5 text-sm break-words [overflow-wrap:anywhere]",
                 m.role === "user"
-                  ? "ml-auto bg-accent/15 border border-accent/25 text-bone whitespace-pre-wrap"
-                  : "bg-white border border-black/[0.06] text-bone/85 shadow-soft"
+                  ? "ml-auto bg-[linear-gradient(180deg,_rgba(248,214,168,0.62)_0%,_rgba(255,243,224,0.9)_100%)] border border-accent/25 text-bone"
+                  : "bg-white/96 border border-[#d7e5f4] text-bone/85 shadow-[0_10px_22px_rgba(42,81,126,0.06)]"
               )}
             >
               {m.role === "buddy" && m.hint_level && (
@@ -230,11 +234,9 @@ export function BuddyChat({
         {busy && <div className="text-xs text-bone/40 italic">Buddy is thinking…</div>}
       </div>
 
-      <div className="border-t border-black/[0.06] p-3">
-        <div className="flex gap-2 items-end">
-          <textarea
-            ref={textareaRef}
-            rows={1}
+      <div className="border-t border-[#cadef3] bg-white/72 p-3">
+        <div className="flex gap-2">
+          <input
             value={q}
             onChange={(e) => {
               setQ(e.target.value);
@@ -252,13 +254,13 @@ export function BuddyChat({
                 : "Ask Buddy… (Enter to send, Shift+Enter for new line)"
             }
             disabled={disabled}
-            className="flex-1 min-h-[42px] max-h-40 resize-none overflow-y-auto bg-ink-100 text-bone placeholder:text-bone/35 border border-black/[0.06] rounded-xl px-3 py-2 text-sm leading-relaxed whitespace-pre-wrap break-words [overflow-wrap:anywhere] outline-none focus:bg-white focus:border-accent/50 disabled:opacity-50"
+            className="flex-1 bg-[#f7fbff] text-bone placeholder:text-bone/35 border border-[#d5e3f2] rounded-xl px-3 py-2 text-sm outline-none focus:bg-white focus:border-[#6aa7e8] disabled:opacity-50"
           />
           <button
             type="button"
             onClick={send}
             disabled={busy || disabled}
-            className="shrink-0 px-3 py-2 rounded-xl bg-accent text-white disabled:opacity-40 hover:bg-accent-deep transition"
+            className="px-3 py-2 rounded-xl bg-[linear-gradient(180deg,_#2c8bf0_0%,_#1f72d9_100%)] text-white disabled:opacity-40 hover:brightness-105 transition shadow-[0_10px_20px_rgba(31,114,217,0.2)]"
           >
             <Send className="h-4 w-4" />
           </button>

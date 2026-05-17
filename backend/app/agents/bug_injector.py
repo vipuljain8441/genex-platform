@@ -21,28 +21,31 @@ def _compact_files(files: list[CodeFile]) -> list[dict]:
     ]
 
 
+def _is_file_dict(d: object) -> bool:
+    """A real CodeFile dict must have path, content, and language — not just path."""
+    return isinstance(d, dict) and "path" in d and "content" in d and "language" in d
+
+
 def _extract_files_list(data: dict) -> list[dict] | None:
     """Find the files list regardless of how the model wrapped the response."""
-    # Try common top-level key names
+    # Primary: common top-level key names — require all three CodeFile fields
     for key in ("files", "modified_files", "output_files", "codebase", "result"):
         val = data.get(key)
-        if isinstance(val, list) and val:
-            if isinstance(val[0], dict) and "path" in val[0]:
-                return val
+        if isinstance(val, list) and val and _is_file_dict(val[0]):
+            return val
 
     # One level deep (model may have nested under a parent key)
     for v in data.values():
         if isinstance(v, dict):
             for key in ("files", "modified_files", "output_files"):
                 val = v.get(key)
-                if isinstance(val, list) and val and isinstance(val[0], dict) and "path" in val[0]:
+                if isinstance(val, list) and val and _is_file_dict(val[0]):
                     return val
 
-    # Last resort: look for any list whose items have {path, content}
+    # Last resort: any list whose first item looks like a complete CodeFile
     for v in data.values():
-        if isinstance(v, list) and v and isinstance(v[0], dict):
-            if "path" in v[0] and "content" in v[0]:
-                return v
+        if isinstance(v, list) and v and _is_file_dict(v[0]):
+            return v
 
     return None
 
@@ -61,11 +64,24 @@ async def run(golden: Codebase, brief: BugInjectionBrief) -> Codebase:
 
     files_raw = _extract_files_list(data)
     if not files_raw:
-        log.error("bug_injector: no files list in LLM response. keys=%s", list(data.keys()))
-        # Fall back to returning the golden codebase unmodified rather than crashing
+        log.error("bug_injector: no valid files list in LLM response. keys=%s", list(data.keys()))
         log.warning("bug_injector: falling back to golden codebase (no bugs injected)")
         return golden
 
+    files: list[CodeFile] = []
+    for f in files_raw:
+        if not _is_file_dict(f):
+            log.warning("bug_injector: skipping malformed file dict keys=%s", list(f.keys()) if isinstance(f, dict) else type(f))
+            continue
+        try:
+            files.append(CodeFile(**f))
+        except Exception as exc:
+            log.warning("bug_injector: skipping unparseable file %r: %s", f.get("path", "?"), exc)
+
+    if not files:
+        log.warning("bug_injector: all file dicts were invalid — falling back to golden codebase")
+        return golden
+    
     golden_by_path = {f.path: f for f in golden.files}
     files: list[CodeFile] = []
     for item in files_raw:

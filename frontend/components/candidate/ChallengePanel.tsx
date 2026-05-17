@@ -55,17 +55,17 @@ export function ChallengePanel({
   const sqlResult = sqlResults[active.id];
 
   return (
-    <div className="h-full grid grid-rows-[auto_1fr] min-h-0">
+    <div className="h-full grid grid-rows-[auto_1fr] min-h-0 bg-transparent">
       {/* Challenge list */}
-      <div className="border-b border-black/[0.06] p-3 space-y-2 bg-white/70">
+      <div className="border-b border-[#decba9]/80 p-3 space-y-2 bg-[linear-gradient(180deg,_rgba(255,251,243,0.98)_0%,_rgba(252,245,232,0.94)_100%)]">
         <div className="text-[10px] uppercase tracking-[0.22em] text-bone/40">Challenge sequence</div>
         <div>
           <div className="flex items-center justify-between text-[11px] text-bone/45 mb-1">
             <span>Progress</span>
             <span>{completedCount}/{challenges.length}</span>
           </div>
-          <div className="h-2 rounded-full bg-black/[0.06] overflow-hidden">
-            <div className="h-full bg-accent transition-all" style={{ width: `${progressPct}%` }} />
+          <div className="h-2 rounded-full bg-[#e8dcc7] overflow-hidden">
+            <div className="h-full bg-[linear-gradient(90deg,_#d5884f_0%,_#f0b56f_100%)] transition-all" style={{ width: `${progressPct}%` }} />
           </div>
         </div>
         <div className="space-y-1.5">
@@ -77,10 +77,10 @@ export function ChallengePanel({
                 key={challenge.id}
                 onClick={() => onSelectChallenge(challenge.id)}
                 className={cn(
-                  "w-full text-left rounded-xl border px-3 py-2 transition",
+                  "w-full text-left rounded-xl border px-3 py-2 transition shadow-[0_6px_14px_rgba(84,62,28,0.04)]",
                   activeItem
-                    ? "border-accent/40 bg-accent-soft/70"
-                    : "border-black/[0.06] bg-white hover:border-black/15"
+                    ? "border-accent/40 bg-[linear-gradient(180deg,_rgba(248,214,168,0.72)_0%,_rgba(255,244,226,0.92)_100%)]"
+                    : "border-[#eadbc4] bg-white/92 hover:border-[#d6bb93] hover:bg-[#fffaf1]"
                 )}
               >
                 <div className="flex items-center gap-2">
@@ -103,7 +103,7 @@ export function ChallengePanel({
       </div>
 
       {/* Active challenge detail */}
-      <div className="overflow-y-auto scrollbar-thin p-5 space-y-5">
+      <div className="overflow-y-auto scrollbar-thin p-5 space-y-5 bg-[linear-gradient(180deg,_rgba(255,252,246,0.86)_0%,_rgba(250,243,232,0.82)_100%)]">
         <div className="flex items-start justify-between gap-3">
           <div>
             <div className="flex items-center gap-2 flex-wrap">
@@ -140,7 +140,7 @@ export function ChallengePanel({
         )}
 
         {active.instructions && (
-          <div className="rounded-2xl border border-black/[0.06] bg-white p-4">
+          <div className="rounded-2xl border border-[#e2d1b4] bg-white/95 p-4 shadow-[0_10px_24px_rgba(74,57,27,0.05)]">
             <div className="text-xs uppercase tracking-[0.22em] text-bone/40 mb-2">Instructions</div>
             <p className="text-sm text-bone/75 leading-relaxed whitespace-pre-line">{active.instructions}</p>
           </div>
@@ -165,7 +165,7 @@ export function ChallengePanel({
             <div className="text-xs uppercase tracking-[0.22em] text-bone/40 mb-2">Issues to resolve</div>
             <div className="space-y-2">
               {active.issues.map((issue, idx) => (
-                <div key={issue.id} className="rounded-xl border border-black/[0.06] bg-[#fcfbf7] p-3">
+                <div key={issue.id} className="rounded-xl border border-[#e5d6bf] bg-[linear-gradient(180deg,_#fffdf8_0%,_#f9f2e7_100%)] p-3 shadow-[0_8px_20px_rgba(84,62,28,0.04)]">
                   <div className="text-sm text-bone font-medium">{idx + 1}. {issue.title}</div>
                   <div className="mt-1 text-xs text-bone/55">{issue.description}</div>
                 </div>
@@ -181,7 +181,7 @@ export function ChallengePanel({
               {active.related_files.map((path) => (
                 <span
                   key={path}
-                  className="rounded-lg border border-black/[0.06] bg-white px-2 py-1 font-mono text-xs text-bone/65 inline-flex items-center gap-1"
+                  className="rounded-lg border border-[#dfceb3] bg-white/92 px-2 py-1 font-mono text-xs text-bone/65 inline-flex items-center gap-1"
                 >
                   <FileCode2 className="h-3 w-3" />
                   {path}
@@ -193,7 +193,7 @@ export function ChallengePanel({
 
         {/* ── Theory response ── */}
         {active.kind === "theory" && (
-          <div className="rounded-2xl border border-black/[0.06] bg-white p-4 space-y-3">
+          <div className="rounded-2xl border border-[#e2d1b4] bg-white/95 p-4 space-y-3 shadow-[0_10px_24px_rgba(74,57,27,0.05)]">
             <div className="text-sm font-medium inline-flex items-center gap-2">
               <NotebookPen className="h-4 w-4 text-accent" />
               Written response
@@ -205,7 +205,7 @@ export function ChallengePanel({
               value={response?.answer_text || ""}
               onChange={(e) => onChangeAnswerText(active.id, e.target.value)}
               rows={10}
-              className="w-full rounded-xl border border-black/[0.08] bg-[#fcfbf7] px-3 py-3 text-sm outline-none focus:border-accent/50 resize-none"
+              className="w-full rounded-xl border border-[#e1d1b6] bg-[#fffcf6] px-3 py-3 text-sm outline-none focus:border-accent/50 resize-none"
               placeholder="Write your explanation here…"
             />
           </div>

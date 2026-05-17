@@ -12,13 +12,15 @@ import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import {
   ArrowLeft,
+  ChevronLeft,
+  ChevronRight,
   Clock,
   Code2,
   ListChecks,
   Loader2,
+  Maximize2,
   MessageSquareText,
   Minus,
-  PanelRightOpen,
   Send,
   Terminal,
   X,
@@ -58,13 +60,15 @@ export type SqlResult = {
 };
 
 type ViewMode = "overview" | "workspace";
-type RightTab = "challenges" | "buddy";
-type RightPanelState = "open" | "minimized" | "closed";
+type PanelSectionState = "expanded" | "minimized" | "closed";
 
 const MIN_WIDTH = 300;
 const MAX_WIDTH = 560;
 const DEFAULT_WIDTH = 380;
-const STRIP_WIDTH = 44;
+const MIN_SECTION_HEIGHT = 180;
+const MINIMIZED_SECTION_HEIGHT = 58;
+const DEFAULT_CHALLENGE_SECTION_HEIGHT = 360;
+const PANEL_PEEK_WIDTH = 56;
 
 function clampWidth(w: number) {
   return Math.max(MIN_WIDTH, Math.min(w, MAX_WIDTH));
@@ -81,10 +85,13 @@ export function Workspace({
   const router = useRouter();
 
   const [viewMode, setViewMode] = useState<ViewMode>("overview");
-  const [rightTab, setRightTab] = useState<RightTab>("challenges");
-  const [rightPanelState, setRightPanelState] = useState<RightPanelState>("open");
+  const [challengePanelState, setChallengePanelState] = useState<PanelSectionState>("expanded");
+  const [buddyPanelState, setBuddyPanelState] = useState<PanelSectionState>("expanded");
   const [rightWidth, setRightWidth] = useState(DEFAULT_WIDTH);
-  const [isDragging, setIsDragging] = useState(false);
+  const [challengePanelHeight, setChallengePanelHeight] = useState(DEFAULT_CHALLENGE_SECTION_HEIGHT);
+  const [panelSlidOut, setPanelSlidOut] = useState(false);
+  const [isSidebarDragging, setIsSidebarDragging] = useState(false);
+  const [isSectionDragging, setIsSectionDragging] = useState(false);
 
   const [activeChallengeId, setActiveChallengeId] = useState<string | null>(
     initialChallengeId || challenges[0]?.id || null
@@ -99,7 +106,13 @@ export function Workspace({
 
   const [sqlResults, setSqlResults] = useState<Record<string, SqlResult>>({});
   const responseDebounce = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
-  const dragState = useRef<{ startX: number; startWidth: number } | null>(null);
+  const sidebarDragState = useRef<{ startX: number; startWidth: number } | null>(null);
+  const sectionDragState = useRef<{
+    startY: number;
+    startHeight: number;
+    containerHeight: number;
+  } | null>(null);
+  const sectionContainerRef = useRef<HTMLDivElement | null>(null);
 
   const activeChallenge = challenges.find((c) => c.id === activeChallengeId) || challenges[0] || null;
   const isCodingChallenge = activeChallenge?.kind === "coding";
@@ -136,14 +149,28 @@ export function Workspace({
   // ── Drag resize ─────────────────────────────────────────────────────────────
   useEffect(() => {
     function onMouseMove(event: MouseEvent) {
-      const drag = dragState.current;
-      if (!drag) return;
-      setRightWidth(clampWidth(drag.startWidth - (event.clientX - drag.startX)));
+      const sidebarDrag = sidebarDragState.current;
+      if (sidebarDrag) {
+        setRightWidth(clampWidth(sidebarDrag.startWidth - (event.clientX - sidebarDrag.startX)));
+      }
+      const sectionDrag = sectionDragState.current;
+      if (sectionDrag) {
+        const maxHeight = Math.max(
+          MIN_SECTION_HEIGHT,
+          sectionDrag.containerHeight - MIN_SECTION_HEIGHT
+        );
+        const nextHeight = Math.max(
+          MIN_SECTION_HEIGHT,
+          Math.min(maxHeight, sectionDrag.startHeight + (event.clientY - sectionDrag.startY))
+        );
+        setChallengePanelHeight(nextHeight);
+      }
     }
     function onMouseUp() {
-      if (!dragState.current) return;
-      dragState.current = null;
-      setIsDragging(false);
+      sidebarDragState.current = null;
+      sectionDragState.current = null;
+      setIsSidebarDragging(false);
+      setIsSectionDragging(false);
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
     }
@@ -196,8 +223,9 @@ export function Workspace({
     if (!challenge) return;
     setActiveChallengeId(challengeId);
     setViewMode("workspace");
-    setRightPanelState("open");
-    setRightTab("challenges");
+    setChallengePanelState("expanded");
+    setBuddyPanelState((current) => (current === "closed" ? "expanded" : current));
+    setPanelSlidOut(false);
     monitor.event("challenge_switch", null, { challenge_id: challengeId, challenge_kind: challenge.kind });
     try { await api.setCurrentChallenge(sessionId, challengeId); } catch {}
     if (challenge.kind === "coding") await ensureSandbox();
@@ -296,17 +324,39 @@ export function Workspace({
   }
 
   function startResize(clientX: number) {
-    dragState.current = { startX: clientX, startWidth: rightWidth };
-    setIsDragging(true);
+    sidebarDragState.current = { startX: clientX, startWidth: rightWidth };
+    setIsSidebarDragging(true);
     document.body.style.cursor = "col-resize";
     document.body.style.userSelect = "none";
   }
 
-  const panelWidth = rightPanelState === "open"
-    ? rightWidth
-    : rightPanelState === "minimized"
-      ? STRIP_WIDTH
-      : 0;
+  function startSectionResize(clientY: number) {
+    const container = sectionContainerRef.current;
+    if (!container) return;
+    sectionDragState.current = {
+      startY: clientY,
+      startHeight: challengePanelHeight,
+      containerHeight: container.clientHeight,
+    };
+    setIsSectionDragging(true);
+    document.body.style.cursor = "row-resize";
+    document.body.style.userSelect = "none";
+  }
+
+  function openChallengePanel() {
+    setChallengePanelState("expanded");
+    setPanelSlidOut(false);
+  }
+
+  function openBuddyPanel() {
+    setBuddyPanelState("expanded");
+    setPanelSlidOut(false);
+  }
+
+  const panelOpen = challengePanelState !== "closed" || buddyPanelState !== "closed";
+  const panelWidth = panelOpen ? rightWidth : 0;
+  const sectionCardWidth = Math.max(Math.min(rightWidth - 88, 420), 240);
+  const panelSlideX = panelOpen && panelSlidOut ? Math.max(panelWidth - PANEL_PEEK_WIDTH, 0) : 0;
 
   // ── Render ──────────────────────────────────────────────────────────────────
   return (
@@ -341,13 +391,34 @@ export function Workspace({
             </Button>
           )}
 
-          {viewMode === "workspace" && rightPanelState === "closed" && (
+          {viewMode === "workspace" && (
             <Button
-              onClick={() => setRightPanelState("open")}
+              onClick={openChallengePanel}
               size="sm"
               variant="outline"
             >
-              <PanelRightOpen className="h-4 w-4" /> Open panel
+              <ListChecks className="h-4 w-4" /> Challenges
+            </Button>
+          )}
+
+          {viewMode === "workspace" && (
+            <Button
+              onClick={openBuddyPanel}
+              size="sm"
+              variant="outline"
+            >
+              <MessageSquareText className="h-4 w-4" /> Buddy
+            </Button>
+          )}
+
+          {viewMode === "workspace" && panelOpen && (
+            <Button
+              onClick={() => setPanelSlidOut((current) => !current)}
+              size="sm"
+              variant="outline"
+            >
+              {panelSlidOut ? <ChevronLeft className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+              {panelSlidOut ? "Slide In" : "Slide Out"}
             </Button>
           )}
 
@@ -394,16 +465,19 @@ export function Workspace({
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           transition={{ duration: 0.25 }}
-          className="flex-1 min-h-0 flex overflow-hidden"
+          className="flex-1 min-h-0 flex overflow-hidden relative"
         >
           {/* ── Main content ── */}
           <section
             className={cn(
-              "flex-1 min-w-0 min-h-0 relative overflow-hidden",
+              "flex-1 min-w-0 min-h-0 relative overflow-hidden transition-[filter] duration-300",
               isCodingChallenge
                 ? "bg-[#1e1e1e]"
                 : "bg-[radial-gradient(circle_at_top_left,_rgba(244,200,110,0.12),_transparent_30%),linear-gradient(180deg,_#fbf7ee_0%,_#f4efe3_100%)]"
             )}
+            style={{
+              filter: panelOpen ? "saturate(0.96)" : "none",
+            }}
           >
             {isCodingChallenge ? (
               <>
@@ -443,128 +517,196 @@ export function Workspace({
           </section>
 
           {/* ── Right panel ── */}
-          {rightPanelState !== "closed" && (
-            <aside
+          {panelOpen && (
+            <motion.aside
+              initial={false}
+              animate={{
+                width: panelWidth,
+                x: panelSlideX,
+                opacity: 1,
+              }}
+              transition={{
+                width: isSidebarDragging ? { duration: 0 } : { type: "spring", stiffness: 260, damping: 28 },
+                x: isSidebarDragging ? { duration: 0 } : { type: "spring", stiffness: 250, damping: 30 },
+                opacity: { duration: 0.16 },
+              }}
               className={cn(
-                "flex-shrink-0 border-l border-black/[0.06] bg-[#f8f4ea] min-h-0 flex flex-col relative overflow-hidden",
-                !isDragging && "transition-[width] duration-200 ease-out"
+                "absolute right-0 top-0 bottom-0 z-20 border-l border-[#d9c9ac]/70 bg-[linear-gradient(180deg,_rgba(255,252,245,0.98)_0%,_rgba(247,239,223,0.96)_52%,_rgba(239,229,209,0.96)_100%)] backdrop-blur-md min-h-0 flex flex-col overflow-hidden shadow-[-28px_0_70px_rgba(53,38,16,0.16)] rounded-l-[28px]"
               )}
               style={{ width: panelWidth }}
             >
-              {rightPanelState === "minimized" ? (
-                /* ── Minimized strip ── */
-                <div className="flex flex-col items-center gap-2 pt-3 pb-3">
+              <div className="absolute left-0 top-0 bottom-0 z-40 w-14 border-r border-[#dcc9aa]/80 bg-[linear-gradient(180deg,_rgba(255,252,246,0.96)_0%,_rgba(245,235,216,0.92)_100%)]">
+                <div className="flex h-full flex-col items-center justify-between py-4">
                   <button
-                    onClick={() => setRightPanelState("open")}
-                    title="Expand panel"
-                    className="p-2 rounded-lg text-bone/40 hover:text-bone hover:bg-black/[0.06] transition"
+                    onClick={() => setPanelSlidOut((current) => !current)}
+                    title={panelSlidOut ? "Slide panel left" : "Slide panel right"}
+                    className="grid h-9 w-9 place-items-center rounded-2xl bg-white/95 text-bone/65 shadow-sm ring-1 ring-[#d9c8aa] transition hover:text-bone hover:ring-accent/25"
                   >
-                    <PanelRightOpen className="h-4 w-4 rotate-180" />
+                    {panelSlidOut ? <ChevronLeft className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
                   </button>
-                  <div className="w-px h-3 bg-black/[0.08]" />
-                  <button
-                    onClick={() => { setRightPanelState("open"); setRightTab("challenges"); }}
-                    title="Challenges"
-                    className={cn(
-                      "p-2 rounded-lg transition",
-                      rightTab === "challenges" ? "bg-accent/15 text-accent" : "text-bone/40 hover:text-bone hover:bg-black/[0.06]"
-                    )}
-                  >
-                    <ListChecks className="h-4 w-4" />
-                  </button>
-                  <button
-                    onClick={() => { setRightPanelState("open"); setRightTab("buddy"); }}
-                    title="Buddy"
-                    className={cn(
-                      "p-2 rounded-lg transition",
-                      rightTab === "buddy" ? "bg-accent/15 text-accent" : "text-bone/40 hover:text-bone hover:bg-black/[0.06]"
-                    )}
-                  >
-                    <MessageSquareText className="h-4 w-4" />
-                  </button>
+
+                  <div className="flex flex-col items-center gap-2">
+                    <button
+                      onClick={openChallengePanel}
+                      className="grid h-9 w-9 place-items-center rounded-2xl bg-accent/10 text-accent transition hover:bg-accent/16"
+                      title="Open challenges"
+                    >
+                      <ListChecks className="h-4 w-4" />
+                    </button>
+                    <button
+                      onClick={openBuddyPanel}
+                      className="grid h-9 w-9 place-items-center rounded-2xl bg-[#1f7ae0]/10 text-[#1f7ae0] transition hover:bg-[#1f7ae0]/16"
+                      title="Open buddy"
+                    >
+                      <MessageSquareText className="h-4 w-4" />
+                    </button>
+                  </div>
+
+                  <div className="text-[10px] font-medium uppercase tracking-[0.22em] text-bone/35 [writing-mode:vertical-rl] rotate-180">
+                    Slide
+                  </div>
                 </div>
-              ) : (
-                <>
-                  {/* ── Resize handle (left edge) ── */}
-                  <div
-                    onMouseDown={(e: ReactMouseEvent<HTMLDivElement>) => startResize(e.clientX)}
-                    className="absolute left-0 top-0 bottom-0 z-20 w-2 cursor-col-resize group"
-                  >
-                    <div className="mx-auto h-full w-px bg-black/[0.08] transition group-hover:bg-accent/50" />
-                  </div>
+              </div>
 
-                  {/* ── Tab bar ── */}
-                  <div className="flex-shrink-0 flex items-center gap-1 px-2 pt-2 pb-0 border-b border-black/[0.06]">
-                    <button
-                      onClick={() => setRightTab("challenges")}
-                      className={cn(
-                        "flex items-center gap-1.5 px-3 py-2 text-[11px] font-medium rounded-t-lg transition border-b-2 -mb-px",
-                        rightTab === "challenges"
-                          ? "border-accent text-accent bg-white/60"
-                          : "border-transparent text-bone/50 hover:text-bone hover:bg-black/[0.04]"
-                      )}
-                    >
-                      <ListChecks className="h-3.5 w-3.5" />
-                      Challenges
-                    </button>
-                    <button
-                      onClick={() => setRightTab("buddy")}
-                      className={cn(
-                        "flex items-center gap-1.5 px-3 py-2 text-[11px] font-medium rounded-t-lg transition border-b-2 -mb-px",
-                        rightTab === "buddy"
-                          ? "border-accent text-accent bg-white/60"
-                          : "border-transparent text-bone/50 hover:text-bone hover:bg-black/[0.04]"
-                      )}
-                    >
-                      <MessageSquareText className="h-3.5 w-3.5" />
-                      Buddy
-                    </button>
-
-                    <div className="ml-auto flex items-center gap-0.5">
-                      <button
-                        onClick={() => setRightPanelState("minimized")}
-                        title="Minimize panel"
-                        className="p-1.5 rounded-md text-bone/40 hover:text-bone hover:bg-black/[0.06] transition"
-                      >
-                        <Minus className="h-3.5 w-3.5" />
-                      </button>
-                      <button
-                        onClick={() => setRightPanelState("closed")}
-                        title="Close panel"
-                        className="p-1.5 rounded-md text-bone/40 hover:text-bone hover:bg-black/[0.06] transition"
-                      >
-                        <X className="h-3.5 w-3.5" />
-                      </button>
-                    </div>
+              {/* ── Resize handle (left edge) ── */}
+              {!panelSlidOut && (
+                <div
+                  onMouseDown={(e: ReactMouseEvent<HTMLDivElement>) => startResize(e.clientX)}
+                  onDoubleClick={() => setRightWidth(DEFAULT_WIDTH)}
+                  className="absolute -left-3 top-0 bottom-0 z-30 w-6 cursor-col-resize group"
+                  title="Drag to resize"
+                >
+                  <div className="absolute left-1/2 top-1/2 flex h-24 w-3 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-white/92 shadow-sm ring-1 ring-black/[0.06] transition group-hover:bg-white group-hover:ring-accent/25">
+                    <div className="h-10 w-1 rounded-full bg-black/[0.12] transition group-hover:bg-accent/45" />
                   </div>
-
-                  {/* ── Panel content ── */}
-                  <div className="flex-1 min-h-0 overflow-hidden">
-                    {rightTab === "challenges" ? (
-                      <ChallengePanel
-                        challenges={challenges}
-                        activeChallengeId={activeChallengeId}
-                        responses={responses}
-                        sqlResults={sqlResults}
-                        onSelectChallenge={selectChallenge}
-                        onChangeStatus={updateChallengeStatus}
-                        onChangeAnswerText={updateChallengeAnswerText}
-                        onToggleObjectiveOption={toggleObjectiveOption}
-                        onRunSQL={runSQL}
-                      />
-                    ) : (
-                      <BuddyChat
-                        sessionId={sessionId}
-                        challengeId={activeChallenge?.id}
-                        disabled={buddyDisabled}
-                        disabledReason="Buddy is disabled for theory and objective challenges."
-                        workspace={{}}
-                      />
-                    )}
-                  </div>
-                </>
+                </div>
               )}
-            </aside>
+
+              <div
+                className={cn(
+                  "ml-14 transition-opacity duration-200",
+                  panelSlidOut && "pointer-events-none opacity-0"
+                )}
+              >
+              <div className="flex-shrink-0 border-b border-[#d8c7a8]/80 bg-[linear-gradient(180deg,_rgba(255,255,255,0.88)_0%,_rgba(255,249,238,0.78)_100%)] px-4 py-4">
+                <div className="text-[10px] uppercase tracking-[0.22em] text-bone/40">
+                  Assessment Side Panel
+                </div>
+                <div className="mt-1 text-base font-semibold text-bone">
+                  Challenges and Buddy
+                </div>
+                <div className="mt-1 text-[11px] leading-relaxed text-bone/50">
+                  Resize the panel horizontally, then scroll left or right inside this side panel.
+                </div>
+              </div>
+
+              <div
+                className="flex-1 min-h-0 overflow-x-auto overflow-y-hidden scrollbar-thin p-3"
+              >
+                <div className="flex h-full min-w-full gap-3 pr-3 snap-x snap-mandatory">
+                {challengePanelState !== "closed" && (
+                  <section
+                    className="min-h-0 h-full flex-none overflow-hidden rounded-[22px] border border-[#dcc9a8]/85 bg-[linear-gradient(180deg,_rgba(255,255,255,0.94)_0%,_rgba(252,246,236,0.94)_100%)] shadow-[0_14px_28px_rgba(68,50,22,0.08)] flex flex-col snap-start"
+                    style={{
+                      width: challengePanelState === "minimized" ? 108 : sectionCardWidth,
+                    }}
+                  >
+                    <div className="flex items-center gap-3 border-b border-black/[0.06] bg-[#fffaf0] px-3 py-2">
+                      <div className="grid h-8 w-8 place-items-center rounded-xl bg-accent/12 text-accent">
+                        <ListChecks className="h-4 w-4" />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="text-sm font-semibold text-bone">Challenges</div>
+                        <div className="text-[11px] text-bone/50">
+                          {completedCount}/{Math.max(challenges.length, 1)} completed
+                        </div>
+                      </div>
+                      <div className="ml-auto flex items-center gap-1">
+                        <button
+                          onClick={() => setChallengePanelState((current) => current === "expanded" ? "minimized" : "expanded")}
+                          title={challengePanelState === "expanded" ? "Minimize challenges" : "Expand challenges"}
+                          className="rounded-md p-1.5 text-bone/40 transition hover:bg-black/[0.06] hover:text-bone"
+                        >
+                          {challengePanelState === "expanded" ? <Minus className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
+                        </button>
+                        <button
+                          onClick={() => setChallengePanelState("closed")}
+                          title="Close challenges"
+                          className="rounded-md p-1.5 text-bone/40 transition hover:bg-black/[0.06] hover:text-bone"
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                    {challengePanelState === "expanded" && (
+                      <div className="min-h-0 flex-1 overflow-hidden">
+                        <ChallengePanel
+                          challenges={challenges}
+                          activeChallengeId={activeChallengeId}
+                          responses={responses}
+                          sqlResults={sqlResults}
+                          onSelectChallenge={selectChallenge}
+                          onChangeStatus={updateChallengeStatus}
+                          onChangeAnswerText={updateChallengeAnswerText}
+                          onToggleObjectiveOption={toggleObjectiveOption}
+                          onRunSQL={runSQL}
+                        />
+                      </div>
+                    )}
+                  </section>
+                )}
+
+                {buddyPanelState !== "closed" && (
+                  <section
+                    className="min-h-0 h-full flex-none overflow-hidden rounded-[22px] border border-[#c8daf0]/85 bg-[linear-gradient(180deg,_rgba(251,254,255,0.95)_0%,_rgba(240,247,255,0.94)_100%)] shadow-[0_14px_28px_rgba(35,72,117,0.08)] flex flex-col snap-start"
+                    style={{
+                      width: buddyPanelState === "minimized" ? 108 : sectionCardWidth,
+                    }}
+                  >
+                    <div className="flex items-center gap-3 border-b border-[#c8daf0]/80 bg-[linear-gradient(180deg,_rgba(255,255,255,0.92)_0%,_rgba(241,248,255,0.84)_100%)] px-3 py-2">
+                      <div className="grid h-8 w-8 place-items-center rounded-xl bg-[#1f7ae0]/10 text-[#1f7ae0]">
+                        <MessageSquareText className="h-4 w-4" />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="text-sm font-semibold text-bone">Buddy</div>
+                        <div className="text-[11px] text-bone/50">
+                          {buddyDisabled ? "Disabled for this challenge" : "Hints, explanations, and review"}
+                        </div>
+                      </div>
+                      <div className="ml-auto flex items-center gap-1">
+                        <button
+                          onClick={() => setBuddyPanelState((current) => current === "expanded" ? "minimized" : "expanded")}
+                          title={buddyPanelState === "expanded" ? "Minimize buddy" : "Expand buddy"}
+                          className="rounded-md p-1.5 text-bone/40 transition hover:bg-black/[0.06] hover:text-bone"
+                        >
+                          {buddyPanelState === "expanded" ? <Minus className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
+                        </button>
+                        <button
+                          onClick={() => setBuddyPanelState("closed")}
+                          title="Close buddy"
+                          className="rounded-md p-1.5 text-bone/40 transition hover:bg-black/[0.06] hover:text-bone"
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                    {buddyPanelState === "expanded" && (
+                      <div className="min-h-0 flex-1 overflow-hidden">
+                        <BuddyChat
+                          sessionId={sessionId}
+                          challengeId={activeChallenge?.id}
+                          disabled={buddyDisabled}
+                          disabledReason="Buddy is disabled for this challenge."
+                          showHeader={false}
+                        />
+                      </div>
+                    )}
+                  </section>
+                )}
+                </div>
+              </div>
+              </div>
+            </motion.aside>
           )}
         </motion.div>
       )}

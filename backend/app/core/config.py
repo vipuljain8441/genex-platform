@@ -35,6 +35,9 @@ class Settings(BaseSettings):
 
     # Email provider — Resend. If unset, invites are created but no email is
     # sent; the employer can copy the link from the UI instead.
+    # Optional GitHub personal access token — raises rate-limit from 60 to 5000 req/hr
+    github_token: str = ""
+
     resend_api_key: str = ""
     resend_from_email: str = "GenEx <onboarding@resend.dev>"
 

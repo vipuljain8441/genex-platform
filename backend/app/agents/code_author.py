@@ -1,75 +1,694 @@
-"""Agent B — Code Author. Produces the "golden" artifact."""
+"""Agent B — Code Author.
+
+Produces a production-ready golden codebase. If the active LLM under-generates
+or returns a clearly unusable artifact, we fall back to a local role-aware
+scaffold so the rest of the assessment pipeline still has a solid base.
+"""
 from __future__ import annotations
 
 import json
+import logging
+import re
 
 from app.core.llm import complete_json
 from app.models.schemas import ArtifactKind, Codebase, CodeFile, ExtractedContext, JobSpec, RoleFamily
 from app.prompts.library import CODE_AUTHOR
 
-# Keep job spec compact — strip fields the code author doesn't need
-_JOB_FIELDS = {"title", "role_family", "seniority", "industry", "must_have_skills",
-               "nice_to_have_skills", "jd_text"}
+log = logging.getLogger(__name__)
 
-# LLMs often echo role_family (e.g. "frontend") into artifact_kind — map those safely.
-_ROLE_DEFAULT_ARTIFACT: dict[str, ArtifactKind] = {
-    "backend": ArtifactKind.CODE,
-    "frontend": ArtifactKind.CODE,
-    "fullstack": ArtifactKind.CODE,
-    "data": ArtifactKind.CODE,
-    "qa": ArtifactKind.TEST_SUITE,
-    "devops": ArtifactKind.PIPELINE,
-    "pm": ArtifactKind.SPEC,
-    "design": ArtifactKind.DESIGN_DOC,
+_JOB_FIELDS = {
+    "title", "role_family", "seniority", "industry",
+    "must_have_skills", "nice_to_have_skills", "jd_text",
+}
+_MAX_OUTPUT_TOKENS = 6000
+_MIN_FILES_BY_SENIORITY = {
+    "junior": 5,
+    "mid": 6,
+    "senior": 7,
+    "staff": 8,
 }
 
 
-def _resolve_artifact_kind(raw: object, role_family: RoleFamily) -> ArtifactKind:
-    if isinstance(raw, str):
-        key = raw.strip().lower()
-        try:
-            return ArtifactKind(key)
-        except ValueError:
-            if key in _ROLE_DEFAULT_ARTIFACT:
-                return _ROLE_DEFAULT_ARTIFACT[key]
-    return _ROLE_DEFAULT_ARTIFACT.get(role_family.value, ArtifactKind.CODE)
+def _guess_entry_point(files: list[CodeFile]) -> str | None:
+    if not files:
+        return None
+    preferred = ("main.py", "app.py", "index.ts", "index.js", "server.py", "main.go")
+    for name in preferred:
+        for file in files:
+            if file.path.endswith(name):
+                return file.path
+    for file in files:
+        if not (file.path.endswith(".md") or "test" in file.path.lower()):
+            return file.path
+    return files[0].path
 
-# max_tokens budget: 4000 leaves room for input prompt under 15k TPM (gemma2-9b-it)
-_MAX_OUTPUT_TOKENS = 4000
+
+def _parse_files(raw_files: list) -> list[CodeFile]:
+    out: list[CodeFile] = []
+    for entry in raw_files or []:
+        if not isinstance(entry, dict):
+            continue
+        if "path" not in entry or "content" not in entry:
+            continue
+        entry = {**entry, "language": entry.get("language", "plaintext")}
+        try:
+            out.append(CodeFile(**entry))
+        except Exception as exc:
+            log.warning("code_author: skipping invalid file %r: %s", entry.get("path"), exc)
+    return out
+
+
+def _slug(text: str, fallback: str) -> str:
+    cleaned = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
+    return cleaned or fallback
+
+
+def _domain_terms(job: JobSpec, context: ExtractedContext) -> tuple[str, str, str]:
+    text = " ".join(
+        [
+            job.title,
+            job.industry,
+            job.jd_text,
+            context.domain_summary,
+            " ".join(context.tech_signals),
+        ]
+    ).lower()
+    if any(token in text for token in ("patient", "clinical", "care", "health")):
+        return "care operations", "appointment", "appointments"
+    if any(token in text for token in ("ledger", "bank", "risk", "trade", "fintech", "finance")):
+        return "financial operations", "ledger entry", "ledger entries"
+    if any(token in text for token in ("deploy", "incident", "pipeline", "platform", "infra")):
+        return "platform delivery", "deployment", "deployments"
+    if any(token in text for token in ("warehouse", "analytics", "dataset", "etl", "report")):
+        return "data operations", "job run", "job runs"
+    if any(token in text for token in ("catalog", "inventory", "checkout", "commerce")):
+        return "commerce operations", "catalog item", "catalog items"
+    return "product operations", "work item", "work items"
+
+
+def _readme(job: JobSpec, context: ExtractedContext, run_steps: str, file_map: list[str]) -> str:
+    domain_label, singular, _ = _domain_terms(job, context)
+    return (
+        f"# {job.title} Assessment Service\n\n"
+        f"This scaffold models a realistic slice of {domain_label} work. "
+        f"It manages {singular}s with validation, business rules, and a small but testable module layout.\n\n"
+        "## Key modules\n"
+        + "\n".join(f"- `{path}`" for path in file_map)
+        + "\n\n## Local run\n"
+        f"{run_steps}\n"
+        "\n## Notes\n"
+        "- The codebase is intentionally structured like an inherited team project.\n"
+        "- Business rules live outside transport/UI files so assessment tasks can span multiple layers.\n"
+    )
+
+
+def _python_backend_files(job: JobSpec, context: ExtractedContext) -> list[CodeFile]:
+    domain_label, singular, plural = _domain_terms(job, context)
+    module = _slug(singular.replace(" ", "_"), "work_item")
+    plural_var = plural.replace(" ", "_")
+    files = [
+        CodeFile(
+            path="app/main.py",
+            language="python",
+            content=(
+                "from fastapi import FastAPI\n\n"
+                "from app.middleware import RequestMetricsMiddleware\n"
+                "from app.routes import router\n"
+                "from app.settings import Settings\n\n"
+                "settings = Settings()\n"
+                "app = FastAPI(title=settings.service_name)\n"
+                "app.add_middleware(RequestMetricsMiddleware)\n"
+                "app.include_router(router, prefix='/api/v1')\n\n"
+                "@app.get('/health')\n"
+                "def healthcheck() -> dict[str, str]:\n"
+                "    return {'status': 'ok', 'service': settings.service_name}\n"
+            ),
+        ),
+        CodeFile(
+            path="app/routes.py",
+            language="python",
+            content=(
+                "from fastapi import APIRouter, HTTPException, status\n\n"
+                f"from app.models import {module.title().replace('_', '')}Create, {module.title().replace('_', '')}Record\n"
+                f"from app.services import {module.title().replace('_', '')}Service, service\n\n"
+                "router = APIRouter(tags=['assessment'])\n\n"
+                "@router.get('/items', response_model=list[" + module.title().replace('_', '') + "Record])\n"
+                "def list_items() -> list[" + module.title().replace('_', '') + "Record]:\n"
+                "    return service.list_items()\n\n"
+                "@router.post('/items', response_model=" + module.title().replace('_', '') + "Record, status_code=status.HTTP_201_CREATED)\n"
+                "def create_item(payload: " + module.title().replace('_', '') + "Create) -> " + module.title().replace('_', '') + "Record:\n"
+                "    try:\n"
+                "        return service.create_item(payload)\n"
+                "    except ValueError as exc:\n"
+                "        raise HTTPException(status_code=400, detail=str(exc)) from exc\n"
+            ),
+        ),
+        CodeFile(
+            path="app/services.py",
+            language="python",
+            content=(
+                "from __future__ import annotations\n\n"
+                "from datetime import UTC, datetime\n\n"
+                f"from app.models import {module.title().replace('_', '')}Create, {module.title().replace('_', '')}Record\n"
+                f"from app.repository import {module.title().replace('_', '')}Repository\n\n"
+                "class " + module.title().replace('_', '') + "Service:\n"
+                "    def __init__(self, repository: " + module.title().replace('_', '') + "Repository) -> None:\n"
+                "        self.repository = repository\n\n"
+                "    def list_items(self) -> list[" + module.title().replace('_', '') + "Record]:\n"
+                "        return self.repository.list_items()\n\n"
+                "    def create_item(self, payload: " + module.title().replace('_', '') + "Create) -> " + module.title().replace('_', '') + "Record:\n"
+                f"        if payload.name.lower().startswith('test-'):\n"
+                f"            raise ValueError('Reserved {singular} names cannot start with test-')\n"
+                "        if payload.priority > 5:\n"
+                "            raise ValueError('Priority must stay within the team operating range.')\n"
+                "        record = " + module.title().replace('_', '') + "Record(\n"
+                "            id=f'itm-{int(datetime.now(UTC).timestamp())}',\n"
+                "            name=payload.name,\n"
+                "            owner=payload.owner,\n"
+                "            priority=payload.priority,\n"
+                "            status='queued',\n"
+                "        )\n"
+                "        return self.repository.save(record)\n\n"
+                "service = " + module.title().replace('_', '') + "Service(repository=" + module.title().replace('_', '') + "Repository())\n"
+            ),
+        ),
+        CodeFile(
+            path="app/models.py",
+            language="python",
+            content=(
+                "from pydantic import BaseModel, Field\n\n"
+                "class " + module.title().replace('_', '') + "Create(BaseModel):\n"
+                f"    name: str = Field(min_length=3, description='Human readable {singular} label')\n"
+                "    owner: str = Field(min_length=3)\n"
+                "    priority: int = Field(default=3, ge=1, le=5)\n\n"
+                "class " + module.title().replace('_', '') + "Record(" + module.title().replace('_', '') + "Create):\n"
+                "    id: str\n"
+                "    status: str\n"
+            ),
+        ),
+        CodeFile(
+            path="app/repository.py",
+            language="python",
+            content=(
+                "from __future__ import annotations\n\n"
+                f"from app.models import {module.title().replace('_', '')}Record\n\n"
+                "class " + module.title().replace('_', '') + "Repository:\n"
+                "    def __init__(self) -> None:\n"
+                "        self._items: list[" + module.title().replace('_', '') + "Record] = []\n\n"
+                "    def list_items(self) -> list[" + module.title().replace('_', '') + "Record]:\n"
+                "        return list(self._items)\n\n"
+                "    def save(self, record: " + module.title().replace('_', '') + "Record) -> " + module.title().replace('_', '') + "Record:\n"
+                "        self._items = [existing for existing in self._items if existing.id != record.id]\n"
+                "        self._items.append(record)\n"
+                "        return record\n"
+            ),
+        ),
+        CodeFile(
+            path="app/settings.py",
+            language="python",
+            content=(
+                "from pydantic import BaseModel\n\n"
+                "class Settings(BaseModel):\n"
+                f"    service_name: str = '{job.title}'\n"
+                f"    domain_label: str = '{domain_label}'\n"
+                "    enable_request_metrics: bool = True\n"
+            ),
+        ),
+        CodeFile(
+            path="app/middleware.py",
+            language="python",
+            content=(
+                "from __future__ import annotations\n\n"
+                "import time\n\n"
+                "from starlette.middleware.base import BaseHTTPMiddleware\n"
+                "from starlette.requests import Request\n\n"
+                "class RequestMetricsMiddleware(BaseHTTPMiddleware):\n"
+                "    async def dispatch(self, request: Request, call_next):\n"
+                "        started = time.perf_counter()\n"
+                "        response = await call_next(request)\n"
+                "        response.headers['x-request-duration-ms'] = str(int((time.perf_counter() - started) * 1000))\n"
+                "        return response\n"
+            ),
+        ),
+        CodeFile(
+            path="tests/test_app.py",
+            language="python",
+            content=(
+                "from fastapi.testclient import TestClient\n\n"
+                "from app.main import app\n\n"
+                "client = TestClient(app)\n\n"
+                "def test_healthcheck() -> None:\n"
+                "    response = client.get('/health')\n"
+                "    assert response.status_code == 200\n"
+                "    assert response.json()['status'] == 'ok'\n\n"
+                "def test_create_item_rejects_reserved_prefix() -> None:\n"
+                "    response = client.post('/api/v1/items', json={'name': 'test-hidden', 'owner': 'ops', 'priority': 2})\n"
+                "    assert response.status_code == 400\n\n"
+                "def test_create_item_persists_record() -> None:\n"
+                "    response = client.post('/api/v1/items', json={'name': 'stabilize-flow', 'owner': 'platform', 'priority': 3})\n"
+                "    assert response.status_code == 201\n"
+                "    listing = client.get('/api/v1/items')\n"
+                "    assert listing.status_code == 200\n"
+                "    assert len(listing.json()) >= 1\n"
+            ),
+        ),
+    ]
+    readme_paths = [file.path for file in files]
+    files.append(
+        CodeFile(
+            path="README.md",
+            language="markdown",
+            content=_readme(
+                job,
+                context,
+                "1. `pip install fastapi uvicorn pytest`\n2. `uvicorn app.main:app --reload`\n3. `pytest`",
+                readme_paths,
+            ),
+        )
+    )
+    return files
+
+
+def _typescript_frontend_files(job: JobSpec, context: ExtractedContext) -> list[CodeFile]:
+    domain_label, singular, plural = _domain_terms(job, context)
+    files = [
+        CodeFile(
+            path="src/App.tsx",
+            language="typescript",
+            content=(
+                "import { useAssessmentState } from './state/useAssessmentState';\n"
+                "import { WorkQueue } from './components/WorkQueue';\n\n"
+                "export default function App() {\n"
+                "  const { items, addItem, selectedOwner, setSelectedOwner } = useAssessmentState();\n"
+                "  return (\n"
+                "    <main>\n"
+                f"      <h1>{job.title}</h1>\n"
+                f"      <p>Operational view for {domain_label}.</p>\n"
+                "      <label>\n"
+                "        Owner\n"
+                "        <input value={selectedOwner} onChange={(event) => setSelectedOwner(event.target.value)} />\n"
+                "      </label>\n"
+                "      <button onClick={() => addItem()}>Create draft item</button>\n"
+                "      <WorkQueue items={items} />\n"
+                "    </main>\n"
+                "  );\n"
+                "}\n"
+            ),
+        ),
+        CodeFile(
+            path="src/components/WorkQueue.tsx",
+            language="typescript",
+            content=(
+                "import type { WorkItem } from '../types';\n\n"
+                "export function WorkQueue({ items }: { items: WorkItem[] }) {\n"
+                "  return (\n"
+                "    <section>\n"
+                f"      <h2>Active {plural}</h2>\n"
+                "      <ul>\n"
+                "        {items.map((item) => (\n"
+                "          <li key={item.id}>\n"
+                "            <strong>{item.name}</strong> - {item.owner} - {item.status}\n"
+                "          </li>\n"
+                "        ))}\n"
+                "      </ul>\n"
+                "    </section>\n"
+                "  );\n"
+                "}\n"
+            ),
+        ),
+        CodeFile(
+            path="src/hooks/useDraftCreator.ts",
+            language="typescript",
+            content=(
+                "import type { WorkItem } from '../types';\n\n"
+                "export function createDraftItem(owner: string, total: number): WorkItem {\n"
+                "  if (!owner.trim()) {\n"
+                "    throw new Error('Owner is required before creating a draft item.');\n"
+                "  }\n"
+                "  return {\n"
+                "    id: `itm-${total + 1}`,\n"
+                "    name: `draft-${total + 1}`,\n"
+                "    owner,\n"
+                "    status: 'queued',\n"
+                "  };\n"
+                "}\n"
+            ),
+        ),
+        CodeFile(
+            path="src/state/useAssessmentState.ts",
+            language="typescript",
+            content=(
+                "import { useState } from 'react';\n\n"
+                "import { createDraftItem } from '../hooks/useDraftCreator';\n"
+                "import type { WorkItem } from '../types';\n\n"
+                "export function useAssessmentState() {\n"
+                "  const [selectedOwner, setSelectedOwner] = useState('platform');\n"
+                "  const [items, setItems] = useState<WorkItem[]>([]);\n\n"
+                "  function addItem() {\n"
+                "    setItems((current) => [...current, createDraftItem(selectedOwner, current.length)]);\n"
+                "  }\n\n"
+                "  return { items, addItem, selectedOwner, setSelectedOwner };\n"
+                "}\n"
+            ),
+        ),
+        CodeFile(
+            path="src/types.ts",
+            language="typescript",
+            content=(
+                "export type WorkItem = {\n"
+                "  id: string;\n"
+                "  name: string;\n"
+                "  owner: string;\n"
+                "  status: 'queued' | 'active' | 'done';\n"
+                "};\n"
+            ),
+        ),
+        CodeFile(
+            path="src/config.ts",
+            language="typescript",
+            content=(
+                "export const appConfig = {\n"
+                f"  title: '{job.title}',\n"
+                f"  domainLabel: '{domain_label}',\n"
+                "  maxVisibleItems: 20,\n"
+                "};\n"
+            ),
+        ),
+        CodeFile(
+            path="src/__tests__/App.test.tsx",
+            language="typescript",
+            content=(
+                "import { describe, expect, it } from 'vitest';\n"
+                "import { createDraftItem } from '../hooks/useDraftCreator';\n\n"
+                "describe('createDraftItem', () => {\n"
+                "  it('creates a queued item for a valid owner', () => {\n"
+                "    const item = createDraftItem('platform', 1);\n"
+                "    expect(item.status).toBe('queued');\n"
+                "  });\n\n"
+                "  it('rejects blank owners', () => {\n"
+                "    expect(() => createDraftItem('', 1)).toThrowError();\n"
+                "  });\n"
+                "});\n"
+            ),
+        ),
+    ]
+    readme_paths = [file.path for file in files]
+    files.append(
+        CodeFile(
+            path="README.md",
+            language="markdown",
+            content=_readme(
+                job,
+                context,
+                "1. `npm install`\n2. `npm run dev`\n3. `npm test`",
+                readme_paths,
+            ),
+        )
+    )
+    return files
+
+
+def _typescript_fullstack_files(job: JobSpec, context: ExtractedContext) -> list[CodeFile]:
+    domain_label, singular, plural = _domain_terms(job, context)
+    files = [
+        CodeFile(
+            path="backend/server.ts",
+            language="typescript",
+            content=(
+                "import express from 'express';\n"
+                "import { createItem, listItems } from './service';\n\n"
+                "const app = express();\n"
+                "app.use(express.json());\n\n"
+                "app.get('/health', (_req, res) => res.json({ status: 'ok' }));\n"
+                "app.get('/api/items', (_req, res) => res.json(listItems()));\n"
+                "app.post('/api/items', (req, res) => {\n"
+                "  try {\n"
+                "    res.status(201).json(createItem(req.body));\n"
+                "  } catch (error) {\n"
+                "    res.status(400).json({ detail: error instanceof Error ? error.message : 'Unknown error' });\n"
+                "  }\n"
+                "});\n\n"
+                "app.listen(3001);\n"
+            ),
+        ),
+        CodeFile(
+            path="backend/service.ts",
+            language="typescript",
+            content=(
+                "import { repository } from './store';\n"
+                "import type { WorkItem, WorkItemInput } from '../shared/types';\n\n"
+                "export function listItems(): WorkItem[] {\n"
+                "  return repository.list();\n"
+                "}\n\n"
+                "export function createItem(payload: WorkItemInput): WorkItem {\n"
+                "  if (!payload.owner?.trim()) {\n"
+                "    throw new Error('Owner is required.');\n"
+                "  }\n"
+                "  return repository.save({\n"
+                "    id: `itm-${Date.now()}`,\n"
+                "    name: payload.name,\n"
+                "    owner: payload.owner,\n"
+                "    status: 'queued',\n"
+                "  });\n"
+                "}\n"
+            ),
+        ),
+        CodeFile(
+            path="backend/store.ts",
+            language="typescript",
+            content=(
+                "import type { WorkItem } from '../shared/types';\n\n"
+                "class WorkRepository {\n"
+                "  private items: WorkItem[] = [];\n\n"
+                "  list(): WorkItem[] {\n"
+                "    return [...this.items];\n"
+                "  }\n\n"
+                "  save(item: WorkItem): WorkItem {\n"
+                "    this.items = this.items.filter((existing) => existing.id !== item.id);\n"
+                "    this.items.push(item);\n"
+                "    return item;\n"
+                "  }\n"
+                "}\n\n"
+                "export const repository = new WorkRepository();\n"
+            ),
+        ),
+        CodeFile(
+            path="frontend/src/App.tsx",
+            language="typescript",
+            content=(
+                "import { useEffect, useState } from 'react';\n"
+                "import type { WorkItem } from '../../shared/types';\n\n"
+                "export default function App() {\n"
+                "  const [items, setItems] = useState<WorkItem[]>([]);\n"
+                "  useEffect(() => {\n"
+                "    fetch('/api/items').then((response) => response.json()).then(setItems);\n"
+                "  }, []);\n"
+                "  return (\n"
+                "    <main>\n"
+                f"      <h1>{job.title}</h1>\n"
+                f"      <p>Operations surface for {domain_label}.</p>\n"
+                "      <ul>{items.map((item) => <li key={item.id}>{item.name} - {item.status}</li>)}</ul>\n"
+                "    </main>\n"
+                "  );\n"
+                "}\n"
+            ),
+        ),
+        CodeFile(
+            path="frontend/src/api.ts",
+            language="typescript",
+            content=(
+                "export async function createItem(payload: { name: string; owner: string }) {\n"
+                "  const response = await fetch('/api/items', {\n"
+                "    method: 'POST',\n"
+                "    headers: { 'content-type': 'application/json' },\n"
+                "    body: JSON.stringify(payload),\n"
+                "  });\n"
+                "  if (!response.ok) {\n"
+                "    throw new Error('Failed to create item');\n"
+                "  }\n"
+                "  return response.json();\n"
+                "}\n"
+            ),
+        ),
+        CodeFile(
+            path="shared/types.ts",
+            language="typescript",
+            content=(
+                "export type WorkItem = {\n"
+                "  id: string;\n"
+                "  name: string;\n"
+                "  owner: string;\n"
+                "  status: 'queued' | 'active' | 'done';\n"
+                "};\n\n"
+                "export type WorkItemInput = {\n"
+                "  name: string;\n"
+                "  owner: string;\n"
+                "};\n"
+            ),
+        ),
+        CodeFile(
+            path="tests/service.test.ts",
+            language="typescript",
+            content=(
+                "import { describe, expect, it } from 'vitest';\n"
+                "import { createItem } from '../backend/service';\n\n"
+                "describe('createItem', () => {\n"
+                "  it('creates an item for valid input', () => {\n"
+                "    const created = createItem({ name: 'sync-release', owner: 'platform' });\n"
+                "    expect(created.status).toBe('queued');\n"
+                "  });\n\n"
+                "  it('rejects missing owners', () => {\n"
+                "    expect(() => createItem({ name: 'sync-release', owner: '' })).toThrowError();\n"
+                "  });\n"
+                "});\n"
+            ),
+        ),
+    ]
+    readme_paths = [file.path for file in files]
+    files.append(
+        CodeFile(
+            path="README.md",
+            language="markdown",
+            content=_readme(
+                job,
+                context,
+                "1. `npm install`\n2. `npm run dev`\n3. `npm test`",
+                readme_paths,
+            ),
+        )
+    )
+    return files
+
+
+def _data_files(job: JobSpec, context: ExtractedContext) -> list[CodeFile]:
+    domain_label, singular, plural = _domain_terms(job, context)
+    files = [
+        CodeFile(path="pipeline/main.py", language="python", content="from pipeline.transform import normalize_records\nfrom pipeline.load import load_records\nfrom pipeline.extract import read_source\n\n\ndef run_pipeline() -> int:\n    rows = read_source()\n    normalized = normalize_records(rows)\n    return load_records(normalized)\n"),
+        CodeFile(path="pipeline/extract.py", language="python", content=f"def read_source() -> list[dict[str, str]]:\n    return [{{'id': 'row-1', 'name': 'daily-{singular.replace(' ', '-')}', 'owner': 'analytics'}}]\n"),
+        CodeFile(path="pipeline/transform.py", language="python", content="def normalize_records(rows: list[dict[str, str]]) -> list[dict[str, str]]:\n    normalized: list[dict[str, str]] = []\n    for row in rows:\n        normalized.append({'id': row['id'], 'name': row['name'].strip().lower(), 'owner': row['owner'].strip().lower()})\n    return normalized\n"),
+        CodeFile(path="pipeline/load.py", language="python", content="from pipeline.models import LoadSummary\n\n\ndef load_records(rows: list[dict[str, str]]) -> int:\n    summary = LoadSummary(processed=len(rows), duplicates=0)\n    return summary.processed - summary.duplicates\n"),
+        CodeFile(path="pipeline/models.py", language="python", content="from dataclasses import dataclass\n\n\n@dataclass(slots=True)\nclass LoadSummary:\n    processed: int\n    duplicates: int\n"),
+        CodeFile(path="pipeline/settings.py", language="python", content=f"SERVICE_NAME = '{job.title}'\nDOMAIN_LABEL = '{domain_label}'\n"),
+        CodeFile(path="tests/test_pipeline.py", language="python", content="from pipeline.main import run_pipeline\n\n\ndef test_run_pipeline_returns_count() -> None:\n    assert run_pipeline() == 1\n"),
+    ]
+    readme_paths = [file.path for file in files]
+    files.append(CodeFile(path="README.md", language="markdown", content=_readme(job, context, "1. `python -m pipeline.main`\n2. `pytest`", readme_paths)))
+    return files
+
+
+def _devops_files(job: JobSpec, context: ExtractedContext) -> list[CodeFile]:
+    readme_paths = [
+        "Dockerfile",
+        ".github/workflows/ci.yml",
+        "deploy/deploy.sh",
+        "infra/main.tf",
+        "monitoring/alerts.yaml",
+        "scripts/verify.sh",
+        "config/service.env.example",
+    ]
+    files = [
+        CodeFile(path="Dockerfile", language="dockerfile", content="FROM python:3.12-slim\nWORKDIR /app\nCOPY . .\nCMD [\"python\", \"-m\", \"http.server\", \"8080\"]\n"),
+        CodeFile(path=".github/workflows/ci.yml", language="yaml", content="name: ci\non: [push]\njobs:\n  validate:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: bash scripts/verify.sh\n"),
+        CodeFile(path="deploy/deploy.sh", language="bash", content="#!/usr/bin/env bash\nset -euo pipefail\necho 'Deploying assessment service'\n"),
+        CodeFile(path="infra/main.tf", language="terraform", content="terraform {\n  required_version = \">= 1.6.0\"\n}\n\nvariable \"service_name\" {\n  type = string\n}\n"),
+        CodeFile(path="monitoring/alerts.yaml", language="yaml", content="alerts:\n  - name: high-error-rate\n    expr: rate(http_requests_total{status=~\"5..\"}[5m]) > 0.05\n"),
+        CodeFile(path="scripts/verify.sh", language="bash", content="#!/usr/bin/env bash\nset -euo pipefail\necho 'lint placeholder'\necho 'test placeholder'\n"),
+        CodeFile(path="config/service.env.example", language="dotenv", content=f"SERVICE_NAME={job.title}\nENVIRONMENT=development\n"),
+        CodeFile(path="README.md", language="markdown", content=_readme(job, context, "1. `bash scripts/verify.sh`\n2. `bash deploy/deploy.sh`", readme_paths)),
+    ]
+    return files
+
+
+def _docs_only_files(job: JobSpec, context: ExtractedContext) -> list[CodeFile]:
+    readme_paths = ["docs/spec.md", "docs/brief.md", "docs/acceptance.md", "docs/risks.md", "docs/metrics.md"]
+    files = [
+        CodeFile(path="docs/spec.md", language="markdown", content=f"# {job.title}\n\n{context.domain_summary or job.jd_text}\n"),
+        CodeFile(path="docs/brief.md", language="markdown", content="## Stakeholders\n- Hiring manager\n- Delivery lead\n- Candidate\n"),
+        CodeFile(path="docs/acceptance.md", language="markdown", content="## Acceptance\n- Clear scope\n- Measurable outcomes\n- Delivery risks called out\n"),
+        CodeFile(path="docs/risks.md", language="markdown", content="## Risks\n- Ambiguous ownership\n- Weak rollout plan\n- Missing observability\n"),
+        CodeFile(path="docs/metrics.md", language="markdown", content="## Metrics\n- Lead time\n- Reliability\n- Candidate signal quality\n"),
+        CodeFile(path="README.md", language="markdown", content=_readme(job, context, "Open the docs folder and review the spec set.", readme_paths)),
+    ]
+    return files
+
+
+def _fallback_files(job: JobSpec, context: ExtractedContext) -> list[CodeFile]:
+    role = job.role_family.value if hasattr(job.role_family, "value") else str(job.role_family)
+    if role == "backend" or role == "qa":
+        return _python_backend_files(job, context)
+    if role == "frontend":
+        return _typescript_frontend_files(job, context)
+    if role == "fullstack":
+        return _typescript_fullstack_files(job, context)
+    if role == "data":
+        return _data_files(job, context)
+    if role == "devops":
+        return _devops_files(job, context)
+    return _docs_only_files(job, context)
+
+
+def _needs_fallback(files: list[CodeFile], expected_min: int) -> bool:
+    if len(files) < expected_min:
+        return True
+    lowered = [file.path.lower() for file in files]
+    has_readme = any(path.endswith("readme.md") for path in lowered)
+    has_test = any("test" in path or "spec" in path for path in lowered)
+    return not has_readme or not has_test
+
+
+def _build_fallback_codebase(job: JobSpec, context: ExtractedContext, reason: str) -> Codebase:
+    files = _fallback_files(job, context)
+    log.warning("code_author: using local scaffold fallback because %s", reason)
+    return Codebase(
+        artifact_kind=ArtifactKind.CODE,
+        entry_point=_guess_entry_point(files),
+        setup_instructions="See README for local setup steps.",
+        files=files,
+    )
 
 
 async def run(job: JobSpec, context: ExtractedContext, review_feedback: str = "") -> Codebase:
     job_compact = {k: v for k, v in job.model_dump().items() if k in _JOB_FIELDS}
-    reviewer_section = (
-        "Reviewer feedback from a prior generation attempt:\n"
-        f"{review_feedback.strip()}\n\n"
-        if review_feedback.strip()
-        else ""
-    )
-    user = (
-        "Job spec:\n"
-        f"{json.dumps(job_compact, indent=2, default=str)}\n\n"
-        "Extracted context:\n"
-        f"{json.dumps(context.model_dump(), indent=2, default=str)}\n\n"
-        f"{reviewer_section}"
-        "Produce the golden artifact JSON described in the system prompt."
-    )
-    data = await complete_json(CODE_AUTHOR, user, temperature=0.6, max_tokens=_MAX_OUTPUT_TOKENS)
-    raw_files = data.get("files") if isinstance(data, dict) else None
-    if not isinstance(raw_files, list):
-        raise ValueError("code author response missing 'files' array")
+    sections = [
+        "Job spec:\n" + json.dumps(job_compact, indent=2, default=str),
+        "Extracted context:\n" + json.dumps(context.model_dump(), indent=2, default=str),
+    ]
+    if review_feedback.strip():
+        sections.append(f"Reviewer feedback to correct on this retry:\n{review_feedback.strip()}")
+    sections.append("Produce the production-ready codebase JSON described in the system prompt.")
+    user = "\n\n".join(sections)
 
-    files: list[CodeFile] = []
-    for item in raw_files:
-        parsed = CodeFile.from_llm(item) if isinstance(item, dict) else None
-        if parsed and parsed.path:
-            files.append(parsed)
+    seniority = job.seniority.value if hasattr(job.seniority, "value") else str(job.seniority)
+    expected_min = _MIN_FILES_BY_SENIORITY.get(seniority, 4)
+
+    try:
+        data = await complete_json(CODE_AUTHOR, user, temperature=0.6, max_tokens=_MAX_OUTPUT_TOKENS)
+    except Exception as exc:
+        log.warning("code_author: model generation failed, switching to local scaffold: %s", exc)
+        return _build_fallback_codebase(job, context, "model generation failed")
+
+    files = _parse_files(data.get("files") or [])
     if not files:
-        raise ValueError("code author returned no valid files")
+        return _build_fallback_codebase(job, context, "no valid files returned")
+
+    if _needs_fallback(files, expected_min):
+        return _build_fallback_codebase(
+            job,
+            context,
+            f"only {len(files)} files generated (expected >= {expected_min})",
+        )
+
+    entry_point = data.get("entry_point") or _guess_entry_point(files)
+    artifact_kind = data.get("artifact_kind", "code")
+    try:
+        artifact_kind_enum = ArtifactKind(artifact_kind)
+    except ValueError:
+        log.warning("code_author: unknown artifact_kind %r, defaulting to 'code'", artifact_kind)
+        artifact_kind_enum = ArtifactKind.CODE
 
     return Codebase(
-        artifact_kind=_resolve_artifact_kind(data.get("artifact_kind"), job.role_family),
-        entry_point=data.get("entry_point"),
+        artifact_kind=artifact_kind_enum,
+        entry_point=entry_point,
         setup_instructions=data.get("setup_instructions", ""),
         files=files,
     )

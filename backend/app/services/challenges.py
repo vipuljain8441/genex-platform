@@ -426,12 +426,14 @@ def _preferred_challenge_kinds(
     if any(term in combined_text for term in {"query", "analytics", "warehouse", "dataset", "reporting"}):
         preferred.append(ChallengeKind.SQL)
 
-    if job.role_family.value in {"pm", "design", "devops"} or any(
+    if job.role_family.value in {"pm", "design"} or job.seniority in {"senior", "staff"} or any(
         term in combined_text for term in {"architecture", "rollout", "incident", "migration", "reliability"}
     ):
         preferred.append(ChallengeKind.THEORY)
 
-    if job.seniority in {"junior", "mid"} or job.role_family.value in {"qa", "frontend", "backend"}:
+    if job.seniority == "junior" or job.role_family.value in {"qa"} or (
+        job.seniority == "mid" and job.challenge_count >= 3
+    ):
         preferred.append(ChallengeKind.OBJECTIVE)
 
     for kind in requested:

@@ -117,8 +117,8 @@ class PipelineReviewerTests(unittest.TestCase):
         self.assertFalse(review["approved"])
         joined = "\n".join(review["reasons"]).lower()
         self.assertIn("too short", joined)
-        self.assertIn("at least one implementation-oriented challenge", joined)
-        self.assertIn("multiple concrete issues", joined)
+        self.assertIn("at least one implementation-oriented coding challenge", joined)
+        self.assertIn("at least 2 concrete sub-issues", joined)
 
 
 if __name__ == "__main__":

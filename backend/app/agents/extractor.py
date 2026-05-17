@@ -52,18 +52,20 @@ def _from_recruiter_context(job: JobSpec) -> ExtractedContext | None:
     )
 
 
-async def run(job: JobSpec) -> ExtractedContext:
+async def run(job: JobSpec, review_feedback: str = "") -> ExtractedContext:
     # 1. Trust the recruiter if they filled in context.
     direct = _from_recruiter_context(job)
     if direct is not None:
         return direct
 
     # 2. Otherwise synthesise from JD + tool.
-    user = (
-        "Job spec:\n"
-        f"{json.dumps(job.model_dump(), indent=2, default=str)}\n\n"
-        f"PM tool connected: {job.pm_tool}\n"
-        "Produce the JSON described in the system prompt."
-    )
+    sections = [
+        "Job spec:\n" + json.dumps(job.model_dump(), indent=2, default=str),
+        f"PM tool connected: {job.pm_tool}",
+    ]
+    if review_feedback.strip():
+        sections.append(f"Reviewer feedback to correct on this retry:\n{review_feedback.strip()}")
+    sections.append("Produce the JSON described in the system prompt.")
+    user = "\n\n".join(sections)
     data = await complete_json(EXTRACTOR, user, temperature=0.5)
     return ExtractedContext(**data)
