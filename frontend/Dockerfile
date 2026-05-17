@@ -12,12 +12,13 @@ ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL} \
     NODE_ENV=production \
     PORT=3000
 
-COPY frontend/package*.json ./
-RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi
+COPY frontend/package.json ./
+RUN npm install --legacy-peer-deps
 
-COPY frontend ./ 
+COPY frontend ./
 
 RUN npm run build
 
 EXPOSE 3000
+
 CMD ["npm", "run", "start", "--", "--hostname", "0.0.0.0", "--port", "3000"]
