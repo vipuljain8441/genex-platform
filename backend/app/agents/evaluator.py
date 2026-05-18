@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections import Counter
 
 from pydantic import ValidationError
 
@@ -23,9 +24,11 @@ from app.prompts.library import EVALUATOR
 log = logging.getLogger(__name__)
 
 # Keep token budget manageable across model tiers
-_MAX_FILE_CHARS = 2000
-_MAX_FILES = 8
+_MAX_FILE_CHARS = 1200
+_MAX_FILES = 6
 _MAX_BUDDY_TURNS = 10
+_MAX_BUDDY_CONTENT_CHARS = 300
+_MAX_RELATED_FILES = 3
 
 
 def _trim_files(files: list[dict]) -> list[dict]:
@@ -36,6 +39,89 @@ def _trim_files(files: list[dict]) -> list[dict]:
             content = content[:_MAX_FILE_CHARS] + "\n# ...(truncated for evaluation)"
         out.append({**f, "content": content})
     return out
+
+
+def _compact_buddy_turns(buddy_history: list[BuddyTurn]) -> list[dict]:
+    out: list[dict] = []
+    for turn in buddy_history[-_MAX_BUDDY_TURNS:]:
+        payload = turn.model_dump(mode="json")
+        content = str(payload.get("content") or "")
+        if len(content) > _MAX_BUDDY_CONTENT_CHARS:
+            payload["content"] = content[:_MAX_BUDDY_CONTENT_CHARS] + "…"
+        payload.pop("edits", None)
+        metadata = payload.get("metadata")
+        if isinstance(metadata, dict) and len(json.dumps(metadata, default=str)) > 400:
+            payload["metadata"] = {"truncated": True}
+        out.append(payload)
+    return out
+
+
+def _select_evaluation_file_paths(
+    golden: Codebase,
+    session: CandidateSession,
+    ticket: CandidateTicket,
+    challenges: list[CandidateChallenge],
+    events: list[ActivityEvent],
+) -> list[str]:
+    golden_by_path = {file.path: file for file in golden.files}
+    ranked: list[str] = []
+    seen: set[str] = set()
+
+    def add(path: str | None) -> None:
+        if not path or path in seen:
+            return
+        seen.add(path)
+        ranked.append(path)
+
+    changed_paths = [
+        path
+        for path, content in session.current_files.items()
+        if path not in golden_by_path or golden_by_path[path].content != content
+    ]
+    for path in changed_paths:
+        add(path)
+
+    file_event_counts = Counter(event.file_path for event in events if event.file_path)
+    for path, _count in file_event_counts.most_common():
+        add(path)
+
+    related_paths: list[str] = []
+    for challenge in challenges[:]:
+        related_paths.extend(challenge.related_files[:_MAX_RELATED_FILES])
+    for path in related_paths:
+        add(path)
+
+    add(golden.entry_point)
+    if golden.files:
+        add(golden.files[0].path)
+
+    return ranked[:_MAX_FILES]
+
+
+def _build_submission_payload(
+    golden: Codebase,
+    session: CandidateSession,
+    ticket: CandidateTicket,
+    challenges: list[CandidateChallenge],
+    events: list[ActivityEvent],
+) -> tuple[list[dict], list[dict]]:
+    selected_paths = _select_evaluation_file_paths(golden, session, ticket, challenges, events)
+    golden_by_path = {file.path: file for file in golden.files}
+
+    candidate_files = [
+        {
+            "path": path,
+            "content": session.current_files.get(path, "")[:_MAX_FILE_CHARS],
+        }
+        for path in selected_paths
+        if path in session.current_files
+    ]
+    golden_files = [
+        golden_by_path[path].model_dump(mode="json")
+        for path in selected_paths
+        if path in golden_by_path
+    ]
+    return _trim_files(golden_files), _trim_files(candidate_files)
 
 
 def _summarise_events(events: list[ActivityEvent]) -> dict:
@@ -219,12 +305,14 @@ async def run(
     events: list[ActivityEvent],
     buddy_history: list[BuddyTurn],
 ) -> EvaluationResult:
-    submitted = [
-        {"path": p, "content": c[:_MAX_FILE_CHARS]}
-        for p, c in session.current_files.items()
-    ]
-    golden_trimmed = _trim_files([f.model_dump() for f in golden.files])
-    buddy_recent = [t.model_dump() for t in buddy_history[-_MAX_BUDDY_TURNS:]]
+    golden_trimmed, submitted = _build_submission_payload(
+        golden,
+        session,
+        ticket,
+        challenges,
+        events,
+    )
+    buddy_recent = _compact_buddy_turns(buddy_history)
 
     # Compact job representation — only what the evaluator needs
     job_summary = {
@@ -251,7 +339,11 @@ async def run(
         indent=2,
         default=str,
     )
-    data = await complete_json(EVALUATOR, user, temperature=0.3, max_tokens=2000)
+    try:
+        data = await complete_json(EVALUATOR, user, temperature=0.2, max_tokens=1400)
+    except Exception as exc:
+        log.warning("evaluator: LLM evaluation failed, using local fallback: %s", exc)
+        data = {}
     normalized = _normalize_evaluation_payload(data, ticket, session, events, buddy_history)
     if not isinstance(data, dict):
         log.warning("evaluator: non-dict payload from model, using normalized fallback fields")

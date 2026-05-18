@@ -391,6 +391,7 @@ class EventKind(str, Enum):
     EDITOR_BLUR = "editor_blur"
     CURSOR_MOVE = "cursor_move"
     SELECTION_CHANGE = "selection_change"
+    VIEWPORT_CHANGE = "viewport_change"
     TERMINAL_OPEN = "terminal_open"
     TERMINAL_COMMAND = "terminal_command"
     TERMINAL_CLEAR = "terminal_clear"

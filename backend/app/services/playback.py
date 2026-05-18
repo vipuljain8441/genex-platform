@@ -35,8 +35,22 @@ class PlaybackStep(TypedDict):
     panel: str | None
     challenge_id: str | None
     command: str | None
+    cwd: str | None
+    exit_code: int | None
+    duration_ms: int | None
+    output_truncated: bool | None
     stdout_preview: str | None
     stderr_preview: str | None
+    added_lines: int | None
+    removed_lines: int | None
+    cursor_line: int | None
+    cursor_column: int | None
+    selection_start_line: int | None
+    selection_start_column: int | None
+    selection_end_line: int | None
+    selection_end_column: int | None
+    viewport_start_line: int | None
+    viewport_end_line: int | None
     line_ranges: list[PlaybackLineRange]
 
 
@@ -171,7 +185,7 @@ def _line_ranges(payload: dict) -> list[PlaybackLineRange]:
 def _event_actor(event: ActivityEvent) -> Literal["candidate", "buddy", "system"]:
     if event.kind.value.startswith("buddy_"):
         return "buddy"
-    if event.kind.value in {"code_sync", "submit", "run"}:
+    if event.kind.value == "submit":
         return "system"
     return "candidate"
 
@@ -180,28 +194,67 @@ def _event_title(event: ActivityEvent) -> str:
     mapping = {
         "file_open": "Opened file",
         "file_switch": "Switched file",
+        "editor_focus": "Focused editor",
+        "cursor_move": "Moved cursor",
+        "selection_change": "Changed selection",
+        "viewport_change": "Scrolled editor",
         "panel_focus_change": "Changed panel",
-        "terminal_command": "Ran terminal command",
+        "terminal_command": "Ran terminal check",
         "buddy_query": "Asked Buddy",
         "buddy_hint": "Buddy replied",
         "challenge_switch": "Switched challenge",
         "challenge_response": "Updated challenge response",
         "edit": "Edited file",
-        "code_sync": "Sandbox sync",
-        "content_delta_snapshot": "Captured content snapshot",
+        "code_sync": "Saved VS Code changes",
+        "content_delta_snapshot": "Tracked workspace change",
         "keystroke_bucket": "Typing burst",
         "window_blur": "Left workspace",
         "window_focus": "Returned to workspace",
         "submit": "Submitted assessment",
+        "run": "Executed workspace code",
     }
     return mapping.get(event.kind.value, event.kind.value.replace("_", " ").title())
 
 
 def _event_summary(event: ActivityEvent) -> tuple[str, str | None, str | None]:
     payload = event.payload if isinstance(event.payload, dict) else {}
+    if event.kind.value == "file_open":
+        return ("Opened a file in the editor.", "editor", None)
+    if event.kind.value == "file_switch":
+        return ("Switched to a different file in the editor.", "editor", None)
+    if event.kind.value == "editor_focus":
+        line = _safe_int(payload.get("cursor_line"))
+        return (
+            f"Focused the editor{f' around line {line}' if line is not None else ''}.",
+            "editor",
+            None,
+        )
+    if event.kind.value == "cursor_move":
+        line = _safe_int(payload.get("cursor_line"))
+        column = _safe_int(payload.get("cursor_column"))
+        detail = f" to L{line}:C{column}" if line is not None and column is not None else ""
+        return (f"Moved the cursor{detail}.", "editor", None)
+    if event.kind.value == "selection_change":
+        start = _safe_int(payload.get("line_start"))
+        end = _safe_int(payload.get("line_end"))
+        if start is not None and end is not None:
+            return (f"Selected lines {start}-{end}.", "editor", None)
+        return ("Changed the text selection.", "editor", None)
+    if event.kind.value == "viewport_change":
+        start = _safe_int(payload.get("visible_start_line"))
+        end = _safe_int(payload.get("visible_end_line"))
+        if start is not None and end is not None:
+            return (f"Scrolled the editor viewport to lines {start}-{end}.", "editor", None)
+        return ("Scrolled the editor viewport.", "editor", None)
     if event.kind.value == "terminal_command":
         command = str(payload.get("command") or "").strip()
-        return (command or "Executed a terminal command.", payload.get("panel") if isinstance(payload.get("panel"), str) else "terminal", command or None)
+        cwd = str(payload.get("cwd") or "").strip()
+        tail = f" from {cwd}" if cwd else ""
+        return (
+            (command and f"{command}{tail}") or "Executed a terminal command.",
+            payload.get("panel") if isinstance(payload.get("panel"), str) else "terminal",
+            command or None,
+        )
     if event.kind.value == "panel_focus_change":
         panel = str(payload.get("panel") or "").strip() or None
         prev = str(payload.get("from_panel") or "").strip()
@@ -229,11 +282,13 @@ def _event_summary(event: ActivityEvent) -> tuple[str, str | None, str | None]:
     if event.kind.value == "code_sync":
         added = _safe_int(payload.get("added_lines")) or 0
         removed = _safe_int(payload.get("removed_lines")) or 0
-        return (f"Sandbox sync recorded +{added} / -{removed} line changes.", "editor", None)
+        file_label = f" in {event.file_path}" if event.file_path else ""
+        return (f"VS Code changes were saved{file_label} (+{added} / -{removed} lines).", "editor", None)
     if event.kind.value == "content_delta_snapshot":
         added = _safe_int(payload.get("lines_added")) or 0
         removed = _safe_int(payload.get("lines_removed")) or 0
-        return (f"Captured a content snapshot (+{added} / -{removed} lines).", "editor", None)
+        file_label = f" for {event.file_path}" if event.file_path else ""
+        return (f"Workspace diff captured{file_label} (+{added} / -{removed} lines).", "editor", None)
     if event.kind.value == "keystroke_bucket":
         count = _safe_int(payload.get("keystrokes")) or _safe_int(payload.get("count")) or 0
         return (f"Typing burst with {count} keystrokes recorded.", "editor", None)
@@ -245,7 +300,8 @@ def _event_summary(event: ActivityEvent) -> tuple[str, str | None, str | None]:
     if event.kind.value == "submit":
         return ("Candidate submitted the assessment.", None, None)
     if event.kind.value == "run":
-        return ("Executed the current file from the assessment runtime.", "terminal", None)
+        command = str(payload.get("command") or "").strip() or None
+        return ("Executed the current file from the assessment runtime.", "terminal", command)
     return (event.kind.value.replace("_", " ").title(), None, None)
 
 
@@ -298,8 +354,30 @@ def build_playback(
                 panel=panel,
                 challenge_id=challenge_id,
                 command=command,
-                stdout_preview=str(payload.get("stdout_preview") or "").strip() or None,
+                cwd=str(payload.get("cwd") or "").strip() or None,
+                exit_code=_safe_int(payload.get("exit_code")),
+                duration_ms=_safe_int(payload.get("duration_ms")),
+                output_truncated=bool(payload.get("output_truncated")) if payload.get("output_truncated") is not None else None,
+                stdout_preview=(
+                    str(
+                        payload.get("stdout_preview")
+                        or payload.get("output_preview")
+                        or payload.get("terminal_output")
+                        or ""
+                    ).strip()
+                    or None
+                ),
                 stderr_preview=str(payload.get("stderr_preview") or "").strip() or None,
+                added_lines=_safe_int(payload.get("added_lines") or payload.get("lines_added")),
+                removed_lines=_safe_int(payload.get("removed_lines") or payload.get("lines_removed")),
+                cursor_line=_safe_int(payload.get("cursor_line")),
+                cursor_column=_safe_int(payload.get("cursor_column")),
+                selection_start_line=_safe_int(payload.get("line_start")),
+                selection_start_column=_safe_int(payload.get("column_start")),
+                selection_end_line=_safe_int(payload.get("line_end")),
+                selection_end_column=_safe_int(payload.get("column_end")),
+                viewport_start_line=_safe_int(payload.get("visible_start_line")),
+                viewport_end_line=_safe_int(payload.get("visible_end_line")),
                 line_ranges=_line_ranges(payload),
             )
         )

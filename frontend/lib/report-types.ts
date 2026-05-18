@@ -438,8 +438,22 @@ export type PlaybackStep = {
   panel: string | null;
   challenge_id: string | null;
   command: string | null;
+  cwd: string | null;
+  exit_code: number | null;
+  duration_ms: number | null;
+  output_truncated: boolean | null;
   stdout_preview: string | null;
   stderr_preview: string | null;
+  added_lines: number | null;
+  removed_lines: number | null;
+  cursor_line: number | null;
+  cursor_column: number | null;
+  selection_start_line: number | null;
+  selection_start_column: number | null;
+  selection_end_line: number | null;
+  selection_end_column: number | null;
+  viewport_start_line: number | null;
+  viewport_end_line: number | null;
   line_ranges: PlaybackLineRange[];
 };
 

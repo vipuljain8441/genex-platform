@@ -79,6 +79,8 @@ export function Workspace({
   sessionId,
   assessmentId,
   challenges,
+  initialFiles,
+  entryPoint,
   durationMinutes,
   initialChallengeId,
   initialResponses,
@@ -598,7 +600,7 @@ export function Workspace({
                   >
                     <div className="absolute left-1/2 top-1/2 h-1 w-16 -translate-x-1/2 -translate-y-1/2 rounded-full bg-bone/25 transition group-hover:bg-accent/60" />
                   </div>
-                  <section className="flex-1 min-h-0 relative bg-[#1e1e1e]">
+                  <section className="flex flex-1 min-h-0 flex-col relative bg-[#1e1e1e]">
                     {sandboxLoading && (
                       <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-4 bg-[#1e1e1e] text-white/60">
                         <Loader2 className="h-8 w-8 animate-spin" />
@@ -618,7 +620,7 @@ export function Workspace({
                     {!sandboxLoading && sandboxUrl && (
                       <iframe
                         src={sandboxUrl}
-                        className="w-full h-full border-0"
+                        className="w-full h-full min-h-0 flex-1 border-0"
                         allow="clipboard-read; clipboard-write"
                         title="VS Code Editor"
                       />

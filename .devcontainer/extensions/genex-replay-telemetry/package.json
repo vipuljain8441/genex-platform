@@ -1,0 +1,17 @@
+{
+  "name": "genex-replay-telemetry",
+  "displayName": "GenEx Replay Telemetry",
+  "description": "Captures lightweight editor telemetry for GenEx employer playback.",
+  "version": "0.0.1",
+  "publisher": "genex",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "*"
+  ],
+  "main": "./extension.js"
+}

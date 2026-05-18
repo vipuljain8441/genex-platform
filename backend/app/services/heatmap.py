@@ -22,6 +22,7 @@ _WEIGHTS = {
     "challenge_response": 1.5,
     "selection_change": 0.5,
     "cursor_move": 0.25,
+    "viewport_change": 0.15,
     "panel_switch": 0.5,
     "idle": -0.5,
     "submit": 5.0,

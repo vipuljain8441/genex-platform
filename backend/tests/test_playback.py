@@ -62,14 +62,36 @@ class PlaybackTests(unittest.TestCase):
                 kind=EventKind.TERMINAL_COMMAND,
                 file_path="app/main.py",
                 at=datetime(2026, 5, 18, 10, 2, 0, tzinfo=timezone.utc),
-                payload={"command": "pytest -q"},
+                payload={
+                    "command": "pytest -q",
+                    "cwd": "/workspace/app",
+                    "output_preview": "1 passed in 0.21s",
+                    "exit_code": 0,
+                    "duration_ms": 210,
+                },
             ),
             ActivityEvent(
                 session_id=session.id,
                 kind=EventKind.CODE_SYNC,
                 file_path="app/main.py",
                 at=datetime(2026, 5, 18, 10, 3, 0, tzinfo=timezone.utc),
-                payload={"changed_ranges": [{"start_line": 2, "end_line": 2, "change_type": "replace"}]},
+                payload={
+                    "changed_ranges": [{"start_line": 2, "end_line": 2, "change_type": "replace"}],
+                    "added_lines": 1,
+                    "removed_lines": 1,
+                },
+            ),
+            ActivityEvent(
+                session_id=session.id,
+                kind=EventKind.CURSOR_MOVE,
+                file_path="app/main.py",
+                at=datetime(2026, 5, 18, 10, 3, 10, tzinfo=timezone.utc),
+                payload={
+                    "cursor_line": 2,
+                    "cursor_column": 7,
+                    "visible_start_line": 1,
+                    "visible_end_line": 12,
+                },
             ),
         ]
         buddy_history = [
@@ -90,8 +112,15 @@ class PlaybackTests(unittest.TestCase):
         playback = build_playback(session, assessment, events, buddy_history)
 
         self.assertEqual(playback["candidate_name"], "Casey")
-        self.assertEqual(len(playback["steps"]), 3)
+        self.assertEqual(len(playback["steps"]), 4)
         self.assertEqual(playback["steps"][1]["command"], "pytest -q")
+        self.assertEqual(playback["steps"][1]["cwd"], "/workspace/app")
+        self.assertEqual(playback["steps"][1]["exit_code"], 0)
+        self.assertEqual(playback["steps"][1]["stdout_preview"], "1 passed in 0.21s")
+        self.assertEqual(playback["steps"][2]["added_lines"], 1)
+        self.assertEqual(playback["steps"][2]["removed_lines"], 1)
+        self.assertEqual(playback["steps"][3]["cursor_line"], 2)
+        self.assertEqual(playback["steps"][3]["viewport_end_line"], 12)
         self.assertEqual(playback["files"][0]["path"], "README.md")
         self.assertEqual(playback["stats"]["terminal_commands"], 1)
         self.assertEqual(len(playback["buddy_transcript"]), 2)

@@ -24,7 +24,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 SESSIONS_ROOT = Path(os.getenv("SESSIONS_ROOT", "/home/coder/sessions"))
-SKIP_DIRS = {".git", "__pycache__", "node_modules", ".idea", ".venv"}
+SKIP_DIRS = {".git", "__pycache__", "node_modules", ".idea", ".venv", ".genex", ".genex-terminal"}
 SKIP_FILES = {".DS_Store", "Thumbs.db"}
 RUN_TIMEOUT_SECONDS = 10
 RUN_OUTPUT_CAP = 8000
@@ -71,6 +71,115 @@ def _git(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
     )
 
 
+def _detect_schema_file(files: dict[str, str]) -> str | None:
+    for candidate in ("schema.sql", "setup.sql", "init.sql"):
+        if candidate in files:
+            return candidate
+    return None
+
+
+def _detect_seed_file(files: dict[str, str]) -> str | None:
+    for candidate in ("seed.sql", "sample_data.sql", "fixtures.sql"):
+        if candidate in files:
+            return candidate
+    return None
+
+
+def _suggest_commands(files: dict[str, str]) -> list[str]:
+    commands = [
+        "pwd",
+        "ls",
+        "sqlite3 database.db '.tables'",
+        "sqlite3 database.db 'SELECT name FROM sqlite_master WHERE type=\"table\";'",
+    ]
+    normalized = set(files)
+    if "requirements.txt" in normalized:
+        commands.append("pip install -r requirements.txt")
+    if "package.json" in normalized:
+        commands.extend(["npm install", "npm test"])
+        package_text = files.get("package.json", "")
+        if '"dev"' in package_text:
+            commands.append("npm run dev")
+        if '"build"' in package_text:
+            commands.append("npm run build")
+    for entrypoint in ("main.py", "app.py", "server.py"):
+        if entrypoint in normalized:
+            commands.append(f"python3 {entrypoint}")
+            break
+    for entrypoint in ("index.ts", "main.ts", "server.ts", "index.tsx", "main.tsx"):
+        if entrypoint in normalized:
+            commands.append(f"tsx {entrypoint}")
+            break
+    return commands[:8]
+
+
+def _write_sandbox_guide(session_dir: Path, files: dict[str, str]) -> None:
+    schema_file = _detect_schema_file(files)
+    seed_file = _detect_seed_file(files)
+    guide_dir = session_dir / ".genex"
+    guide_dir.mkdir(parents=True, exist_ok=True)
+    commands = _suggest_commands(files)
+    schema_note = schema_file or "none"
+    seed_note = seed_file or "none"
+    guide = (
+        "# GenEx Sandbox Guide\n\n"
+        "This workspace is isolated to your assessment session.\n\n"
+        "## What is available\n"
+        "- VS Code editor inside the sandbox\n"
+        "- Integrated terminal with Python, Node.js, TypeScript, Git, and SQLite\n"
+        "- Session-local SQLite database at `database.db`\n"
+        f"- Schema source: `{schema_note}`\n"
+        f"- Seed source: `{seed_note}`\n\n"
+        "## Useful commands\n"
+        + "\n".join(f"- `{command}`" for command in commands)
+        + "\n\n## Notes\n"
+        "- Changes stay inside your assessment workspace.\n"
+        "- Use the terminal to run code, inspect files, and query the SQLite database.\n"
+        "- If a schema file exists, the database is created automatically when the sandbox starts.\n"
+    )
+    (guide_dir / "SANDBOX.md").write_text(guide, encoding="utf-8")
+    (guide_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "workspace_root": str(session_dir),
+                "database": {
+                    "engine": "sqlite",
+                    "path": "database.db",
+                    "schema_file": schema_file,
+                    "seed_file": seed_file,
+                },
+                "commands": commands,
+                "guide_path": ".genex/SANDBOX.md",
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+
+def _ensure_sqlite_database(session_dir: Path, files: dict[str, str]) -> None:
+    db_path = session_dir / "database.db"
+    schema_file = _detect_schema_file(files)
+    seed_file = _detect_seed_file(files)
+    created = False
+    if not db_path.exists():
+        sqlite3.connect(str(db_path)).close()
+        created = True
+    if not created:
+        return
+    try:
+        conn = sqlite3.connect(str(db_path))
+        if schema_file:
+            conn.executescript(files[schema_file])
+        if seed_file:
+            conn.executescript(files[seed_file])
+        conn.commit()
+        conn.close()
+        print(f"[sync] SQLite database ready for {session_dir.name}")
+    except sqlite3.Error as exc:
+        print(f"[sync] SQL init error: {exc}")
+
+
 def _write_files(session_dir: Path, files: dict[str, str]) -> None:
     session_dir.mkdir(parents=True, exist_ok=True)
 
@@ -94,19 +203,8 @@ def _write_files(session_dir: Path, files: dict[str, str]) -> None:
     if not ws_file.exists():
         ws_file.write_text(json.dumps(WORKSPACE_TEMPLATE, indent=2))
 
-    # SQLite db from schema.sql if present
-    schema = files.get("schema.sql") or files.get("setup.sql") or files.get("init.sql")
-    if schema:
-        db_path = session_dir / "database.db"
-        if not db_path.exists():
-            try:
-                conn = sqlite3.connect(str(db_path))
-                conn.executescript(schema)
-                conn.commit()
-                conn.close()
-                print(f"[sync] SQLite database initialized for {session_dir.name}")
-            except sqlite3.Error as exc:
-                print(f"[sync] SQL init error: {exc}")
+    _ensure_sqlite_database(session_dir, files)
+    _write_sandbox_guide(session_dir, files)
 
     # Git init + initial commit
     if not (session_dir / ".git").exists():

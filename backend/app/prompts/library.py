@@ -602,12 +602,12 @@ Specifically for `gap` defects:
 # Output schema (strict JSON, no markdown fences)
 
 {
-  "files": [
+  "modified_files": [
     {"path": "...", "language": "...", "content": "...full file content..."}
   ]
 }
 
-Include EVERY file from the golden codebase — modified or unmodified. The `content` MUST be the COMPLETE file content. NO markdown code fences inside content. NO truncation placeholders like `# rest unchanged`.
+Return ONLY the files you actually changed. Do NOT echo untouched files. The `content` MUST be the COMPLETE final file content for each changed file. NO markdown code fences inside content. NO truncation placeholders like `# rest unchanged`.
 """
 
 

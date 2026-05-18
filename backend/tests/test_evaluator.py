@@ -115,6 +115,76 @@ class EvaluatorTests(unittest.TestCase):
         self.assertTrue(result.gaps)
         self.assertEqual(result.missed_acceptance, ticket.acceptance_criteria)
 
+    def test_run_survives_llm_exception(self) -> None:
+        job = JobSpec(
+            title="Backend Engineer",
+            role_family=RoleFamily.BACKEND,
+            seniority="mid",
+            must_have_skills=["Python", "FastAPI"],
+            jd_text="Build backend APIs and improve service reliability.",
+        )
+        ticket = CandidateTicket(
+            title="Fix validation bug",
+            description="Validation is too permissive on the create route.",
+            acceptance_criteria=["Reject invalid payloads"],
+            priority="high",
+            labels=["backend"],
+        )
+        challenge = CandidateChallenge(
+            kind=ChallengeKind.CODING,
+            title="Fix create handler",
+            acceptance_criteria=["Reject invalid payloads"],
+        )
+        golden = Codebase(
+            artifact_kind=ArtifactKind.CODE,
+            entry_point="app/main.py",
+            files=[
+                CodeFile(
+                    path="app/main.py",
+                    language="python",
+                    content="from fastapi import FastAPI\napp = FastAPI()\n",
+                ),
+                CodeFile(
+                    path="app/routes.py",
+                    language="python",
+                    content="def route():\n    return {}\n",
+                ),
+            ],
+        )
+        session = CandidateSession(
+            assessment_id="AST_test",
+            current_files={
+                "app/main.py": "from fastapi import FastAPI\napp = FastAPI()\n",
+                "app/routes.py": "def route():\n    return {'ok': True}\n",
+            },
+            challenge_responses={
+                challenge.id: ChallengeResponse(
+                    challenge_id=challenge.id,
+                    challenge_kind=ChallengeKind.CODING,
+                    status="completed",
+                    answer_text="Done",
+                )
+            },
+        )
+        events = [ActivityEvent(session_id=session.id, kind=EventKind.EDIT, file_path="app/routes.py")]
+
+        with patch.object(evaluator, "complete_json", AsyncMock(side_effect=RuntimeError("context too large"))):
+            result = asyncio.run(
+                evaluator.run(
+                    job=job,
+                    ticket=ticket,
+                    challenges=[challenge],
+                    golden=golden,
+                    session=session,
+                    events=events,
+                    buddy_history=[],
+                )
+            )
+
+        self.assertGreaterEqual(result.overall_score, 0.0)
+        self.assertEqual(len(result.signals), 5)
+        self.assertTrue(result.narrative)
+
 
 if __name__ == "__main__":
     unittest.main()

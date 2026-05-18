@@ -1,7 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import { motion } from "framer-motion";
 import {
@@ -42,6 +42,17 @@ import { cn, shortId } from "@/lib/utils";
 const BASE_STEP_INTERVAL_MS = 1200;
 const SPEED_OPTIONS = [0.8, 1, 1.6] as const;
 
+type EditorTelemetry = {
+  cursorLine: number | null;
+  cursorColumn: number | null;
+  selectionStartLine: number | null;
+  selectionStartColumn: number | null;
+  selectionEndLine: number | null;
+  selectionEndColumn: number | null;
+  viewportStartLine: number | null;
+  viewportEndLine: number | null;
+};
+
 export default function PlaybackPage() {
   const params = useParams<{ id: string }>();
   const [data, setData] = useState<PlaybackData | null>(null);
@@ -77,6 +88,15 @@ export default function PlaybackPage() {
   }, [playing, data, index, speed]);
 
   const currentStep = data?.steps[index] ?? null;
+  const currentWorkspaceStep = useMemo(() => {
+    if (!data) return null;
+    for (let cursor = index; cursor >= 0; cursor -= 1) {
+      const step = data.steps[cursor];
+      if (!step) continue;
+      if (isWorkspaceDisplayStep(step)) return step;
+    }
+    return currentStep;
+  }, [currentStep, data, index]);
 
   const activeChallengeId = useMemo(() => {
     if (!data) return null;
@@ -112,8 +132,32 @@ export default function PlaybackPage() {
     return data.files[0] ?? null;
   }, [data, index]);
 
+  const activeTelemetry = useMemo(() => {
+    if (!data || !activeFile) return null;
+    for (let cursor = index; cursor >= 0; cursor -= 1) {
+      const step = data.steps[cursor];
+      if (step?.file_path !== activeFile.path) continue;
+      if (!hasEditorTelemetry(step)) continue;
+      return {
+        cursorLine: step.cursor_line,
+        cursorColumn: step.cursor_column,
+        selectionStartLine: step.selection_start_line,
+        selectionStartColumn: step.selection_start_column,
+        selectionEndLine: step.selection_end_line,
+        selectionEndColumn: step.selection_end_column,
+        viewportStartLine: step.viewport_start_line,
+        viewportEndLine: step.viewport_end_line,
+      } satisfies EditorTelemetry;
+    }
+    return null;
+  }, [data, activeFile, index]);
+
   const recentSteps = useMemo(() => {
     if (!data) return [];
+    const prioritized = data.steps
+      .slice(0, index + 1)
+      .filter((step) => !isBackgroundPlaybackStep(step) && isWorkspaceRelevantStep(step));
+    if (prioritized.length > 0) return prioritized.slice(-8);
     return data.steps.slice(Math.max(0, index - 7), index + 1);
   }, [data, index]);
 
@@ -165,6 +209,7 @@ export default function PlaybackPage() {
     const seen = new Set<string>();
 
     for (const step of data.steps) {
+      if (isBackgroundPlaybackStep(step)) continue;
       const challengeKey = step.challenge_id ? `challenge:${step.challenge_id}` : null;
       const fileKey = step.file_path ? `file:${step.file_path}` : null;
 
@@ -175,6 +220,14 @@ export default function PlaybackPage() {
       if (step.actor === "buddy") {
         moments.push(step);
         continue;
+      }
+      if (isEditorPlaybackStep(step)) {
+        if (step.kind === "cursor_move" || step.kind === "selection_change" || step.kind === "viewport_change") {
+          if (moments.length === 0 || moments[moments.length - 1]?.file_path !== step.file_path) {
+            moments.push(step);
+          }
+          continue;
+        }
       }
       if (challengeKey && !seen.has(challengeKey)) {
         seen.add(challengeKey);
@@ -314,7 +367,7 @@ export default function PlaybackPage() {
 
             <div className="grid gap-4 border-b border-white/8 bg-[linear-gradient(180deg,_rgba(18,21,28,0.86)_0%,_rgba(18,21,28,0.7)_100%)] px-4 py-4 sm:px-5 lg:grid-cols-[minmax(0,1.2fr)_minmax(320px,0.8fr)]">
               <WorkspaceInsightStrip
-                step={currentStep}
+                step={currentWorkspaceStep ?? currentStep}
                 activeChallenge={activeChallenge}
                 activeFile={activeFile}
                 terminalCount={terminalSteps.length}
@@ -348,7 +401,7 @@ export default function PlaybackPage() {
                     </div>
                     <div className="h-1.5 flex-shrink-0 border-y border-[#decba9]/70 bg-[#e8d6b6]/40" />
                     <div className="min-h-0 flex-1 bg-[#171b22]">
-                      <WorkspaceReplayPane file={activeFile} step={currentStep} />
+                      <WorkspaceReplayPane file={activeFile} step={currentWorkspaceStep ?? currentStep} telemetry={activeTelemetry} />
                     </div>
                   </div>
 
@@ -878,9 +931,11 @@ function JumpLaneCard({
 function WorkspaceReplayPane({
   file,
   step,
+  telemetry,
 }: {
   file: PlaybackFile | null;
   step: PlaybackStep | null;
+  telemetry: EditorTelemetry | null;
 }) {
   const highlights = file && step?.file_path === file.path ? step.line_ranges : [];
   return (
@@ -899,6 +954,12 @@ function WorkspaceReplayPane({
         </div>
         <div className="flex items-center gap-2">
           {step?.kind && <Badge tone={stepBadgeTone(step)}>{step.kind}</Badge>}
+          {telemetry?.cursorLine && (
+            <Badge className="border-white/10 bg-white/8 text-white/72">
+              Ln {telemetry.cursorLine}
+              {telemetry.cursorColumn ? ` : Col ${telemetry.cursorColumn}` : ""}
+            </Badge>
+          )}
           {file?.language && <span>{file.language}</span>}
         </div>
       </div>
@@ -906,7 +967,7 @@ function WorkspaceReplayPane({
       {!file ? (
         <div className="px-6 py-10 text-sm text-white/50">No file activity has been recorded yet.</div>
       ) : (
-        <CodePane file={file} highlights={highlights} />
+        <CodePane file={file} highlights={highlights} telemetry={telemetry} />
       )}
 
       <div className="pointer-events-none absolute right-4 top-16 w-full max-w-sm">
@@ -915,13 +976,47 @@ function WorkspaceReplayPane({
             <div className="flex items-start justify-between gap-3">
               <div>
                 <div className="text-[10px] uppercase tracking-[0.2em] text-white/40">
-                  Current moment
+                  VS Code moment
                 </div>
                 <div className="mt-2 text-sm font-medium text-white">{step.title}</div>
               </div>
               <div className="text-[11px] text-white/42">{formatDuration(step.offset_seconds)}</div>
             </div>
             <div className="mt-2 text-sm leading-6 text-white/68">{step.summary}</div>
+            {(step.added_lines !== null || step.removed_lines !== null) && (
+              <div className="mt-3 flex flex-wrap gap-2 text-[11px] text-white/58">
+                {step.added_lines !== null && (
+                  <span className="rounded-full border border-white/10 bg-white/6 px-2.5 py-1">
+                    +{step.added_lines} lines
+                  </span>
+                )}
+                {step.removed_lines !== null && (
+                  <span className="rounded-full border border-white/10 bg-white/6 px-2.5 py-1">
+                    -{step.removed_lines} lines
+                  </span>
+                )}
+              </div>
+            )}
+            {telemetry && (
+              <div className="mt-3 flex flex-wrap gap-2 text-[11px] text-white/58">
+                {telemetry.cursorLine && (
+                  <span className="rounded-full border border-white/10 bg-white/6 px-2.5 py-1">
+                    Cursor L{telemetry.cursorLine}
+                    {telemetry.cursorColumn ? `:C${telemetry.cursorColumn}` : ""}
+                  </span>
+                )}
+                {telemetry.selectionStartLine && telemetry.selectionEndLine && (
+                  <span className="rounded-full border border-white/10 bg-white/6 px-2.5 py-1">
+                    Selection L{telemetry.selectionStartLine}-L{telemetry.selectionEndLine}
+                  </span>
+                )}
+                {telemetry.viewportStartLine && telemetry.viewportEndLine && (
+                  <span className="rounded-full border border-white/10 bg-white/6 px-2.5 py-1">
+                    View L{telemetry.viewportStartLine}-L{telemetry.viewportEndLine}
+                  </span>
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -1042,12 +1137,32 @@ function ReplayTerminalStrip({
                 <div className="text-[10px] uppercase tracking-wider text-bone/40">
                   $ {step.command || step.summary}
                 </div>
+                <div className="flex flex-wrap gap-1.5 text-[11px] text-bone/45">
+                  {step.cwd && (
+                    <span className="rounded-full border border-black/[0.08] bg-[#f7f2e8] px-2 py-1">
+                      {step.cwd}
+                    </span>
+                  )}
+                  {step.exit_code !== null && (
+                    <span className="rounded-full border border-black/[0.08] bg-[#f7f2e8] px-2 py-1">
+                      exit {step.exit_code}
+                    </span>
+                  )}
+                  {step.duration_ms !== null && (
+                    <span className="rounded-full border border-black/[0.08] bg-[#f7f2e8] px-2 py-1">
+                      {formatDurationMs(step.duration_ms)}
+                    </span>
+                  )}
+                </div>
                 <div className="text-bone/70">{step.summary}</div>
                 {step.stdout_preview && (
                   <pre className="overflow-x-auto whitespace-pre-wrap rounded-xl bg-[#f7f4ee] px-3 py-2 text-bone/80">{step.stdout_preview}</pre>
                 )}
                 {step.stderr_preview && (
                   <pre className="overflow-x-auto whitespace-pre-wrap rounded-xl bg-[#fff2ef] px-3 py-2 text-coral">{step.stderr_preview}</pre>
+                )}
+                {step.output_truncated && (
+                  <div className="text-[11px] text-bone/40">Output was trimmed for replay.</div>
                 )}
               </div>
             </div>
@@ -1059,9 +1174,9 @@ function ReplayTerminalStrip({
         <div className="flex items-center justify-between border-b border-black/[0.05] bg-white/70 px-4 py-3">
           <div className="flex items-center gap-2 text-xs font-medium text-bone/70">
             <Clock3 className="h-3.5 w-3.5 text-accent" />
-            Activity rhythm
+            VS Code activity
           </div>
-          {currentStep && <Badge tone={stepBadgeTone(currentStep)}>{currentStep.actor}</Badge>}
+          {currentStep && <Badge tone={stepBadgeTone(currentStep)}>{workspaceStepBadge(currentStep)}</Badge>}
         </div>
         <div className="h-[230px] space-y-2 overflow-y-auto bg-[#fbfaf6] p-3">
           {recentSteps.map((step) => (
@@ -1079,11 +1194,19 @@ function ReplayTerminalStrip({
                 <div className="text-[11px] text-bone/40">{formatClock(step.at)}</div>
               </div>
               <div className="mt-1 text-xs leading-5 text-bone/60">{step.summary}</div>
-              {(step.file_path || step.challenge_id) && (
-                <div className="mt-2 text-[11px] font-mono text-bone/42">
-                  {[step.file_path, step.challenge_id].filter(Boolean).join(" · ")}
-                </div>
-              )}
+              <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                <span className={cn("rounded-full px-2 py-1 text-[10px] font-medium uppercase tracking-[0.16em]", workspaceKindTone(step))}>
+                  {momentLabel(step)}
+                </span>
+                {workspaceMeta(step).map((item) => (
+                  <span
+                    key={`${step.index}-${item}`}
+                    className="rounded-full border border-black/[0.08] bg-[#f7f2e8] px-2 py-1 text-[11px] font-mono text-bone/48"
+                  >
+                    {item}
+                  </span>
+                ))}
+              </div>
             </div>
           ))}
         </div>
@@ -1095,11 +1218,28 @@ function ReplayTerminalStrip({
 function CodePane({
   file,
   highlights,
+  telemetry,
 }: {
   file: PlaybackFile;
   highlights: PlaybackLineRange[];
+  telemetry: EditorTelemetry | null;
 }) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
   const lines = file.content.split("\n");
+  const activeLine = telemetry?.cursorLine ?? telemetry?.selectionStartLine ?? null;
+  const selectionStart = telemetry?.selectionStartLine ?? null;
+  const selectionEnd = telemetry?.selectionEndLine ?? null;
+  const viewportStart = telemetry?.viewportStartLine ?? null;
+  const viewportEnd = telemetry?.viewportEndLine ?? null;
+
+  useEffect(() => {
+    const targetLine =
+      activeLine ||
+      (viewportStart && viewportEnd ? Math.max(1, Math.round((viewportStart + viewportEnd) / 2)) : viewportStart);
+    if (!containerRef.current || !targetLine) return;
+    const line = containerRef.current.querySelector<HTMLElement>(`[data-line="${targetLine}"]`);
+    line?.scrollIntoView({ block: "center" });
+  }, [activeLine, viewportStart, viewportEnd, file.path]);
 
   return (
     <div className="flex h-full flex-col bg-[#171a20] text-[#d8dee9]">
@@ -1114,22 +1254,40 @@ function CodePane({
           <span className="text-coral/80">delete</span>
         </div>
       </div>
-      <div className="max-h-full overflow-auto px-0 py-2 font-mono text-[12px] leading-6">
+      <div ref={containerRef} className="max-h-full overflow-auto px-0 py-2 font-mono text-[12px] leading-6">
         {lines.map((line, lineIndex) => {
           const lineNo = lineIndex + 1;
           const highlight = highlights.find(
             (range) => lineNo >= range.start_line && lineNo <= range.end_line
           );
+          const isCursorLine = activeLine === lineNo;
+          const isSelectedLine =
+            selectionStart !== null &&
+            selectionEnd !== null &&
+            lineNo >= Math.min(selectionStart, selectionEnd) &&
+            lineNo <= Math.max(selectionStart, selectionEnd);
+          const isVisibleLine =
+            viewportStart !== null &&
+            viewportEnd !== null &&
+            lineNo >= Math.min(viewportStart, viewportEnd) &&
+            lineNo <= Math.max(viewportStart, viewportEnd);
 
           return (
             <div
               key={lineIndex}
+              data-line={lineNo}
               className={cn(
-                "grid grid-cols-[64px_minmax(0,1fr)] px-4",
+                "grid grid-cols-[64px_minmax(0,1fr)] px-4 transition-colors",
+                isVisibleLine && "bg-white/[0.03]",
+                isSelectedLine && "bg-sky-400/10",
+                isCursorLine && "bg-amber-200/10 ring-1 ring-inset ring-amber-300/18",
                 highlight && highlightTone(highlight.change_type)
               )}
             >
-              <div className="select-none pr-4 text-right text-white/25">{lineNo}</div>
+              <div className="relative select-none pr-4 text-right text-white/25">
+                {isCursorLine && <span className="absolute left-1 top-2.5 h-1.5 w-1.5 rounded-full bg-amber-300 shadow-[0_0_14px_rgba(252,211,77,0.8)]" />}
+                {lineNo}
+              </div>
               <pre className="overflow-x-auto whitespace-pre-wrap break-words text-left">{line || " "}</pre>
             </div>
           );
@@ -1142,6 +1300,15 @@ function CodePane({
 function momentLabel(step: PlaybackStep) {
   if (step.kind === "run") return "Run";
   if (step.kind === "terminal_command") return "Terminal";
+  if (step.kind === "file_open") return "Open";
+  if (step.kind === "file_switch") return "Switch";
+  if (step.kind === "editor_focus") return "Focus";
+  if (step.kind === "code_sync") return "Save";
+  if (step.kind === "content_delta_snapshot") return "Change";
+  if (step.kind === "edit") return "Edit";
+  if (step.kind === "cursor_move") return "Cursor";
+  if (step.kind === "selection_change") return "Selection";
+  if (step.kind === "viewport_change") return "Viewport";
   if (step.actor === "buddy") return "Buddy";
   if (step.challenge_id) return "Challenge";
   if (step.file_path) return "File";
@@ -1151,6 +1318,10 @@ function momentLabel(step: PlaybackStep) {
 function timelineSegmentTone(step: PlaybackStep) {
   if (step.kind === "run") return "bg-emerald-500/90";
   if (step.kind === "terminal_command") return "bg-accent/90";
+  if (step.kind === "code_sync" || step.kind === "content_delta_snapshot" || step.kind === "edit") return "bg-[#63a9ff]";
+  if (step.kind === "cursor_move") return "bg-amber-300/90";
+  if (step.kind === "selection_change") return "bg-sky-400/90";
+  if (step.kind === "viewport_change") return "bg-teal-300/85";
   if (step.actor === "buddy") return "bg-[#63a9ff]";
   if (step.kind.includes("blur")) return "bg-coral/80";
   if (step.challenge_id) return "bg-violet/80";
@@ -1160,6 +1331,9 @@ function timelineSegmentTone(step: PlaybackStep) {
 function stepBadgeTone(step: PlaybackStep): "default" | "accent" | "violet" | "coral" | "amber" {
   if (step.kind === "run") return "amber";
   if (step.kind === "terminal_command") return "accent";
+  if (step.kind === "code_sync" || step.kind === "content_delta_snapshot") return "accent";
+  if (step.kind === "selection_change" || step.kind === "viewport_change") return "accent";
+  if (step.kind === "cursor_move") return "amber";
   if (step.actor === "buddy") return "violet";
   if (step.kind.includes("blur")) return "coral";
   return "default";
@@ -1169,6 +1343,114 @@ function highlightTone(changeType: string) {
   if (changeType === "insert") return "bg-emerald-500/10";
   if (changeType === "delete") return "bg-coral/10";
   return "bg-amber/10";
+}
+
+function hasEditorTelemetry(step: PlaybackStep) {
+  return [
+    step.cursor_line,
+    step.cursor_column,
+    step.selection_start_line,
+    step.selection_start_column,
+    step.selection_end_line,
+    step.selection_end_column,
+    step.viewport_start_line,
+    step.viewport_end_line,
+  ].some((value) => value !== null);
+}
+
+function isBackgroundPlaybackStep(step: PlaybackStep) {
+  return [
+    "window_blur",
+    "window_focus",
+    "idle_start",
+    "idle_end",
+    "ticket_focus_start",
+    "ticket_focus_end",
+  ].includes(step.kind);
+}
+
+function isEditorPlaybackStep(step: PlaybackStep) {
+  return [
+    "file_open",
+    "file_switch",
+    "editor_focus",
+    "cursor_move",
+    "selection_change",
+    "viewport_change",
+    "edit",
+    "keystroke_bucket",
+  ].includes(step.kind);
+}
+
+function isWorkspaceChangeStep(step: PlaybackStep) {
+  return ["code_sync", "content_delta_snapshot", "edit"].includes(step.kind);
+}
+
+function isWorkspaceDisplayStep(step: PlaybackStep) {
+  return isEditorPlaybackStep(step) || isWorkspaceChangeStep(step);
+}
+
+function isWorkspaceRelevantStep(step: PlaybackStep) {
+  if (step.kind === "run" || step.kind === "terminal_command") return true;
+  if (step.actor === "buddy") return true;
+  if (step.kind === "challenge_switch" || step.kind === "panel_focus_change") return true;
+  if (step.file_path) return true;
+  return isWorkspaceDisplayStep(step);
+}
+
+function workspaceStepBadge(step: PlaybackStep) {
+  if (step.kind === "run" || step.kind === "terminal_command") return "terminal";
+  if (step.actor === "buddy") return "buddy";
+  if (isEditorPlaybackStep(step)) return "vscode";
+  if (step.challenge_id) return "task";
+  return step.actor;
+}
+
+function workspaceKindTone(step: PlaybackStep) {
+  if (step.kind === "run") return "bg-emerald-500/12 text-emerald-700";
+  if (step.kind === "terminal_command") return "bg-accent/12 text-accent";
+  if (step.kind === "code_sync" || step.kind === "content_delta_snapshot" || step.kind === "edit") {
+    return "bg-[#1f7ae0]/10 text-[#1658a4]";
+  }
+  if (step.kind === "cursor_move") return "bg-amber-300/22 text-amber-900";
+  if (step.kind === "selection_change") return "bg-sky-400/16 text-sky-900";
+  if (step.kind === "viewport_change") return "bg-teal-300/18 text-teal-900";
+  if (step.kind === "file_open" || step.kind === "file_switch" || step.kind === "editor_focus") {
+    return "bg-[#1f7ae0]/10 text-[#1658a4]";
+  }
+  if (step.actor === "buddy") return "bg-violet/12 text-violet";
+  return "bg-black/[0.05] text-bone/62";
+}
+
+function workspaceMeta(step: PlaybackStep) {
+  const items: string[] = [];
+  if (step.file_path) items.push(step.file_path);
+  if (step.command && step.kind === "terminal_command") items.push(`$ ${step.command}`);
+  if (step.cwd && step.kind === "terminal_command") items.push(step.cwd);
+  if (step.exit_code !== null && (step.kind === "terminal_command" || step.kind === "run")) items.push(`exit ${step.exit_code}`);
+  if (step.duration_ms !== null && (step.kind === "terminal_command" || step.kind === "run")) items.push(formatDurationMs(step.duration_ms));
+  if (step.added_lines !== null || step.removed_lines !== null) {
+    items.push(`+${step.added_lines ?? 0}/-${step.removed_lines ?? 0}`);
+  }
+  if (step.cursor_line) {
+    items.push(
+      step.cursor_column ? `Ln ${step.cursor_line}, Col ${step.cursor_column}` : `Ln ${step.cursor_line}`
+    );
+  }
+  if (step.selection_start_line && step.selection_end_line) {
+    items.push(`Sel ${step.selection_start_line}-${step.selection_end_line}`);
+  }
+  if (step.viewport_start_line && step.viewport_end_line) {
+    items.push(`View ${step.viewport_start_line}-${step.viewport_end_line}`);
+  }
+  if (step.challenge_id) items.push(step.challenge_id);
+  if (step.panel && step.panel !== "editor") items.push(step.panel);
+  return items.slice(0, 4);
+}
+
+function formatDurationMs(durationMs: number) {
+  if (durationMs < 1000) return `${durationMs}ms`;
+  return `${(durationMs / 1000).toFixed(durationMs < 10_000 ? 1 : 0)}s`;
 }
 
 function formatDuration(seconds: number) {

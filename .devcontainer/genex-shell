@@ -9,5 +9,14 @@ fi
 export GENEX_SESSION_ROOT="${GENEX_SESSION_ROOT:-$(pwd -P)}"
 export HOME="$GENEX_SESSION_ROOT"
 export BASH_ENV="/usr/local/etc/genex-shell-rc.sh"
+export GENEX_TERMINAL_DIR="${GENEX_TERMINAL_DIR:-$GENEX_SESSION_ROOT/.genex-terminal}"
+export GENEX_TERMINAL_LOG="${GENEX_TERMINAL_LOG:-$GENEX_TERMINAL_DIR/terminal.log}"
+
+mkdir -p "$GENEX_TERMINAL_DIR"
+
+if [[ "${GENEX_SCRIPT_WRAPPED:-0}" != "1" ]]; then
+  export GENEX_SCRIPT_WRAPPED="1"
+  exec script -q -f "$GENEX_TERMINAL_LOG" -c "/bin/bash --noprofile --rcfile /usr/local/etc/genex-shell-rc.sh -i"
+fi
 
 exec /bin/bash --noprofile --rcfile /usr/local/etc/genex-shell-rc.sh -i

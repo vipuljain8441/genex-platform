@@ -34,8 +34,9 @@ RUN git config --system user.email "candidate@genex.dev" \
     && git config --system init.defaultBranch main \
     && git config --system core.autocrlf false
 
-# Pre-create directories for user-level VS Code settings
+# Pre-create directories for user-level VS Code settings/extensions
 RUN mkdir -p /home/coder/.local/share/code-server/User \
+    /home/coder/.local/share/code-server/extensions \
     && chown -R 1000:1000 /home/coder/.local
 
 # Copy locked-down user settings and keybindings
@@ -43,6 +44,8 @@ COPY --chown=1000:1000 .devcontainer/sandbox-vscode-settings.json \
     /home/coder/.local/share/code-server/User/settings.json
 COPY --chown=1000:1000 .devcontainer/sandbox-vscode-keybindings.json \
     /home/coder/.local/share/code-server/User/keybindings.json
+COPY --chown=1000:1000 .devcontainer/extensions/genex-replay-telemetry \
+    /home/coder/.local/share/code-server/extensions/genex-replay-telemetry
 
 # Inject custom CSS into workbench HTML at build time (runs as root)
 COPY .devcontainer/sandbox-custom.css /tmp/sandbox-custom.css

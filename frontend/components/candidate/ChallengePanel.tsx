@@ -269,6 +269,7 @@ export function ChallengePanel({
               VS Code Workspace
             </div>
             <p>Edit your files in the VS Code editor. The integrated terminal supports Python, Node.js, SQLite, and Git.</p>
+            <p className="text-xs text-bone/48">The workspace also shows a sandbox guide above the editor with DB path, guide file, and starter terminal commands.</p>
             {active.related_files.length > 0 && (
               <p className="text-xs text-bone/45">
                 Start with: {active.related_files.join(", ")}
