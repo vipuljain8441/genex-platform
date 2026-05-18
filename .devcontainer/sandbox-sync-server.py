@@ -64,6 +64,30 @@ def _should_skip(rel: Path) -> bool:
     return any(p in SKIP_DIRS or p in SKIP_FILES for p in rel.parts)
 
 
+def _safe_chmod(path: Path, mode: int) -> None:
+    try:
+        path.chmod(mode)
+    except Exception:
+        pass
+
+
+def _ensure_tree_permissions(session_dir: Path) -> None:
+    """Keep session roots editor-writable across local and Docker runs.
+
+    Some deployments create session folders through a different user or an older
+    container. VS Code then opens the folder successfully but cannot save files.
+    We normalize permissions aggressively here so the candidate workspace stays
+    writable even when the underlying host path was pre-created elsewhere.
+    """
+    if session_dir.exists():
+        _safe_chmod(session_dir, 0o777)
+    for child in session_dir.rglob("*"):
+        if child.is_dir():
+            _safe_chmod(child, 0o777)
+        else:
+            _safe_chmod(child, 0o666)
+
+
 def _git(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
     return subprocess.run(
         ["git"] + args, cwd=cwd, capture_output=True, text=True,
@@ -182,12 +206,15 @@ def _ensure_sqlite_database(session_dir: Path, files: dict[str, str]) -> None:
 
 def _write_files(session_dir: Path, files: dict[str, str]) -> None:
     session_dir.mkdir(parents=True, exist_ok=True)
+    _safe_chmod(session_dir, 0o777)
 
     for rel_path, content in files.items():
         fp = session_dir / rel_path.lstrip("/")
         fp.parent.mkdir(parents=True, exist_ok=True)
+        _safe_chmod(fp.parent, 0o777)
         try:
             fp.write_text(content, encoding="utf-8")
+            _safe_chmod(fp, 0o666)
         except Exception as exc:
             print(f"[sync] write error {rel_path}: {exc}")
 
@@ -212,6 +239,8 @@ def _write_files(session_dir: Path, files: dict[str, str]) -> None:
         _git(["add", "-A"], session_dir)
         _git(["commit", "-m", "chore: initial assessment state", "--allow-empty"], session_dir)
         print(f"[sync] git repo initialized for {session_dir.name}")
+
+    _ensure_tree_permissions(session_dir)
 
 
 def _read_files(session_dir: Path) -> dict[str, str]:
@@ -499,6 +528,7 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     SESSIONS_ROOT.mkdir(parents=True, exist_ok=True)
+    _safe_chmod(SESSIONS_ROOT, 0o777)
     port = int(os.getenv("SYNC_PORT", "8081"))
     server = HTTPServer(("0.0.0.0", port), Handler)
     print(f"[sync] GenEx sandbox sync server on :{port}")

@@ -68,7 +68,13 @@ class Settings(BaseSettings):
 
     @property
     def cors_origins(self) -> list[str]:
+        if self.allow_origins.strip() == "*":
+            return ["*"]
         return [o.strip() for o in self.allow_origins.split(",") if o.strip()]
+
+    @property
+    def cors_allow_all(self) -> bool:
+        return self.allow_origins.strip() == "*" or self.allow_origin_regex.strip() == "*"
 
     @property
     def resolved_llm_provider(self) -> str:
