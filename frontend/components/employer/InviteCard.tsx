@@ -92,7 +92,7 @@ export function InviteCard({ assessmentId }: { assessmentId: string }) {
               <input
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                placeholder="Hridesh K."
+                placeholder="eg. Jane Doe"
                 className="w-full bg-ink-100 text-bone placeholder:text-bone/35 border border-black/[0.08] rounded-xl px-4 py-3 outline-none transition focus:bg-white focus:border-accent/60"
               />
             </div>

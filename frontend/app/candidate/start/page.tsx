@@ -71,7 +71,7 @@ function CandidateStartInner() {
             <TextInput
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="Hridesh K."
+              placeholder="eg. Jane Doe"
             />
           </div>
           {err && <div className="text-coral text-sm">{err}</div>}

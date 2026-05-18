@@ -127,7 +127,7 @@ export default function InvitePage() {
                       <TextInput
                         value={name}
                         onChange={(e) => setName(e.target.value)}
-                        placeholder="Hridesh K."
+                        placeholder="e.g. Jane Doe"
                       />
                     </div>
                     <Button

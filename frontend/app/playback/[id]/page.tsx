@@ -7,9 +7,13 @@ import { motion } from "framer-motion";
 import {
   Activity,
   Bot,
+  ChevronLeft,
+  ChevronRight,
   Clock3,
   FileCode2,
   Gauge,
+  Keyboard,
+  Layers3,
   MessageSquareText,
   Pause,
   Play,
@@ -135,6 +139,26 @@ export default function PlaybackPage() {
       .slice(0, 5);
   }, [data]);
 
+  const challengeMoments = useMemo(() => {
+    if (!data) return [];
+    const seen = new Set<string>();
+    return data.steps.filter((step) => {
+      if (!step.challenge_id || seen.has(step.challenge_id)) return false;
+      seen.add(step.challenge_id);
+      return true;
+    });
+  }, [data]);
+
+  const buddyMoments = useMemo(() => {
+    if (!data) return [];
+    return data.steps.filter((step) => step.actor === "buddy");
+  }, [data]);
+
+  const runtimeMoments = useMemo(() => {
+    if (!data) return [];
+    return data.steps.filter((step) => step.kind === "run" || step.kind === "terminal_command");
+  }, [data]);
+
   const notableMoments = useMemo(() => {
     if (!data) return [];
     const moments: PlaybackStep[] = [];
@@ -164,6 +188,39 @@ export default function PlaybackPage() {
     }
 
     return moments.slice(0, 8);
+  }, [data]);
+
+  useEffect(() => {
+    if (!data) return;
+    const totalSteps = data.steps.length;
+
+    function handleKeydown(event: KeyboardEvent) {
+      const target = event.target as HTMLElement | null;
+      const tagName = target?.tagName ?? "";
+      const isTypingTarget =
+        tagName === "INPUT" || tagName === "TEXTAREA" || target?.isContentEditable;
+      if (isTypingTarget) return;
+
+      if (event.key === " ") {
+        event.preventDefault();
+        setPlaying((current) => !current);
+        return;
+      }
+      if (event.key === "ArrowRight") {
+        event.preventDefault();
+        setPlaying(false);
+        setIndex((current) => Math.min(current + 1, totalSteps - 1));
+        return;
+      }
+      if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        setPlaying(false);
+        setIndex((current) => Math.max(current - 1, 0));
+      }
+    }
+
+    window.addEventListener("keydown", handleKeydown);
+    return () => window.removeEventListener("keydown", handleKeydown);
   }, [data]);
 
   if (error) {
@@ -227,6 +284,9 @@ export default function PlaybackPage() {
             currentStep={currentStep}
             index={index}
             notableMoments={notableMoments}
+            challengeMoments={challengeMoments}
+            buddyMoments={buddyMoments}
+            runtimeMoments={runtimeMoments}
             onSeek={(target) => {
               setPlaying(false);
               setIndex(target);
@@ -443,14 +503,26 @@ function ReplayTimelineCard({
   currentStep,
   index,
   notableMoments,
+  challengeMoments,
+  buddyMoments,
+  runtimeMoments,
   onSeek,
 }: {
   data: PlaybackData;
   currentStep: PlaybackStep | null;
   index: number;
   notableMoments: PlaybackStep[];
+  challengeMoments: PlaybackStep[];
+  buddyMoments: PlaybackStep[];
+  runtimeMoments: PlaybackStep[];
   onSeek: (target: number) => void;
 }) {
+  const previousIndex = Math.max(index - 1, 0);
+  const nextIndex = Math.min(index + 1, data.steps.length - 1);
+  const nextBuddy = buddyMoments.find((step) => step.index > index) ?? null;
+  const nextRuntime = runtimeMoments.find((step) => step.index > index) ?? null;
+  const nextChallenge = challengeMoments.find((step) => step.index > index) ?? null;
+
   return (
     <Card className="overflow-hidden rounded-[28px] border-black/[0.06] bg-white/88 backdrop-blur-sm">
       <CardBody className="space-y-4 sm:space-y-5">
@@ -513,6 +585,93 @@ function ReplayTimelineCard({
                 {momentLabel(step)} · {formatDuration(step.offset_seconds)}
               </button>
             ))}
+          </div>
+        </div>
+
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
+          <div className="rounded-[24px] border border-black/[0.06] bg-white p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div className="text-[10px] uppercase tracking-[0.2em] text-bone/40">
+                  Guided Controls
+                </div>
+                <div className="mt-1 text-sm font-semibold text-bone">
+                  Move step-by-step or jump to the next meaningful moment
+                </div>
+              </div>
+              <div className="inline-flex items-center gap-1.5 rounded-full border border-black/[0.06] bg-[#fcfbf7] px-3 py-1.5 text-[11px] text-bone/58">
+                <Keyboard className="h-3.5 w-3.5 text-accent" />
+                Space / arrows supported
+              </div>
+            </div>
+
+            <div className="mt-4 flex flex-wrap gap-2">
+              <Button variant="outline" onClick={() => onSeek(previousIndex)} disabled={index === 0}>
+                <ChevronLeft className="h-4 w-4" /> Previous
+              </Button>
+              <Button variant="outline" onClick={() => onSeek(nextIndex)} disabled={index >= data.steps.length - 1}>
+                Next <ChevronRight className="h-4 w-4" />
+              </Button>
+            </div>
+
+            <div className="mt-4 grid gap-3 sm:grid-cols-3">
+              <JumpLaneCard
+                label="Next Buddy moment"
+                value={`${buddyMoments.length} total`}
+                note={nextBuddy ? `${nextBuddy.title} at ${formatDuration(nextBuddy.offset_seconds)}` : "No later Buddy moment"}
+                onClick={nextBuddy ? () => onSeek(nextBuddy.index) : undefined}
+                icon={<Bot className="h-4 w-4" />}
+              />
+              <JumpLaneCard
+                label="Next runtime check"
+                value={`${runtimeMoments.length} total`}
+                note={nextRuntime ? `${nextRuntime.title} at ${formatDuration(nextRuntime.offset_seconds)}` : "No later runtime check"}
+                onClick={nextRuntime ? () => onSeek(nextRuntime.index) : undefined}
+                icon={<Terminal className="h-4 w-4" />}
+              />
+              <JumpLaneCard
+                label="Next challenge shift"
+                value={`${challengeMoments.length} total`}
+                note={nextChallenge ? `${nextChallenge.title} at ${formatDuration(nextChallenge.offset_seconds)}` : "No later challenge shift"}
+                onClick={nextChallenge ? () => onSeek(nextChallenge.index) : undefined}
+                icon={<Layers3 className="h-4 w-4" />}
+              />
+            </div>
+          </div>
+
+          <div className="rounded-[24px] border border-black/[0.06] bg-[linear-gradient(180deg,_#fffdf8_0%,_#f8f3e8_100%)] p-4">
+            <div>
+              <div className="text-[10px] uppercase tracking-[0.2em] text-bone/40">
+                Storyline Rail
+              </div>
+              <div className="mt-1 text-sm font-semibold text-bone">
+                The most important points in the session arc
+              </div>
+            </div>
+            <div className="mt-4 space-y-2">
+              {notableMoments.slice(0, 6).map((step) => (
+                <button
+                  key={`rail-${step.index}-${step.at}`}
+                  type="button"
+                  onClick={() => onSeek(step.index)}
+                  className={cn(
+                    "flex w-full items-start gap-3 rounded-[20px] border px-3 py-3 text-left transition",
+                    step.index === index
+                      ? "border-accent/35 bg-accent/8"
+                      : "border-black/[0.06] bg-white hover:border-accent/25"
+                  )}
+                >
+                  <div className={cn("mt-0.5 h-2.5 w-2.5 rounded-full", timelineSegmentTone(step))} />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="truncate text-sm font-medium text-bone">{step.title}</div>
+                      <div className="text-[11px] text-bone/42">{formatDuration(step.offset_seconds)}</div>
+                    </div>
+                    <div className="mt-1 line-clamp-2 text-xs leading-5 text-bone/58">{step.summary}</div>
+                  </div>
+                </button>
+              ))}
+            </div>
           </div>
         </div>
       </CardBody>
@@ -676,6 +835,43 @@ function InsightTile({
       <div className="mt-3 line-clamp-2 text-sm font-semibold text-white/92">{value}</div>
       <div className="mt-2 line-clamp-3 text-xs leading-6 text-white/52">{note}</div>
     </div>
+  );
+}
+
+function JumpLaneCard({
+  label,
+  value,
+  note,
+  onClick,
+  icon,
+}: {
+  label: string;
+  value: string;
+  note: string;
+  onClick?: () => void;
+  icon: ReactNode;
+}) {
+  const disabled = !onClick;
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className={cn(
+        "rounded-[20px] border p-3 text-left transition",
+        disabled
+          ? "cursor-not-allowed border-black/[0.06] bg-[#faf8f2] text-bone/42"
+          : "border-black/[0.06] bg-[#fcfbf7] hover:border-accent/25 hover:bg-white"
+      )}
+    >
+      <div className="flex items-center gap-2 text-accent">
+        {icon}
+        <div className="text-[10px] uppercase tracking-[0.18em] text-bone/40">{label}</div>
+      </div>
+      <div className="mt-2 text-sm font-semibold text-bone">{value}</div>
+      <div className="mt-1 text-xs leading-5 text-bone/52">{note}</div>
+    </button>
   );
 }
 

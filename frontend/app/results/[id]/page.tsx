@@ -218,6 +218,8 @@ export default function ResultsPage() {
 
           {analysis && <AnalysisCard analysis={analysis} />}
 
+          {unlocked && report && <PlaybackCTA url={report.playback_url} />}
+
           {!unlocked ? (
             <LockedReportPreview />
           ) : report ? (
@@ -366,7 +368,6 @@ function FullReport({ report }: { report: ReportData }) {
       <ActivityForensicsPanel data={report.activity_forensics} />
       <BuddyAuditPanel audit={report.buddy_audit} />
       <FeedbackLogPanel feedback={report.feedback_log} />
-      <PlaybackCTA url={report.playback_url} />
     </>
   );
 }
