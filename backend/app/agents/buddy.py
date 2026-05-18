@@ -1,7 +1,8 @@
 """Buddy — scoped engineering mentor for the candidate IDE.
 
-v6: hint-ladder mode (STRICT / MODERATE / GUIDED), structured section layout,
-and mode-aware edit gating. The system prompt lives at app.prompts.library.BUDDY.
+v7: hint-ladder mode (STRICT / MODERATE / GUIDED), tone-aware conversational
+guidance, and mode-aware edit gating. The system prompt lives at
+app.prompts.library.BUDDY.
 """
 from __future__ import annotations
 
@@ -30,17 +31,8 @@ LadderLevel = int  # 1..4
 _MAX_FILE_CHARS = 8000
 _MAX_GROUNDING_CHARS = 3500
 _DEFAULT_MODE: Mode = "MODERATE"
-
-# Section headers required for every non-blocked reply. We match on the plain
-# text (no emoji) so encoding/rendering differences cannot break validation.
-_REQUIRED_SECTIONS = (
-    "WHAT'S HAPPENING",
-    "ISSUES",
-    "WHY THIS WORKS",
-    "THINK ABOUT THIS",
-    "NEXT STEP",
-)
-_CHANGES_SECTION = "CHANGES"
+_MAX_CONTEXT_FILES = 6
+_MAX_MANIFEST_FILES = 40
 
 # Student explicitly asked Buddy to write/apply code.
 _EXPLICIT_CODE = re.compile(
@@ -82,10 +74,10 @@ _OUT_OF_SCOPE = re.compile(
     r")\b"
 )
 
-# Verbatim scope and full-solution redirects from the v6 spec.
+# Warm redirects for conversational Buddy behavior.
 _SCOPE_REDIRECT = (
-    "I can't help with that — I'm here for your assessment. "
-    "Ask me anything about the ticket or the code."
+    "Let's pull it back to the ticket for a sec. Show me the file, failing behavior, "
+    "or error that's blocking you and we'll work it from there."
 )
 _FULL_SOLUTION_REDIRECT = (
     "You're closer than you think. Tell me where it's blocking you "
@@ -169,6 +161,26 @@ _VAGUE_QUESTION = re.compile(
     r"how\s+do\s+i\s+(do|solve|implement)\s+this|"
     r"can\s+you\s+help|need\s+help|"
     r"tell\s+me\s+how\s+to"
+    r")\b"
+)
+
+_FRUSTRATED_TONE = re.compile(
+    r"(?i)\b("
+    r"stuck|frustrated|annoying|wtf|broken|doesn'?t work|not working|"
+    r"hate this|why is this|makes no sense|confused|lost"
+    r")\b"
+)
+
+_URGENT_TONE = re.compile(
+    r"(?i)\b("
+    r"quick|fast|asap|urgent|right now|immediately"
+    r")\b"
+)
+
+_ANALYTICAL_TONE = re.compile(
+    r"(?i)\b("
+    r"walk me through|step by step|explain|reason|why exactly|root cause|"
+    r"what is happening"
     r")\b"
 )
 
@@ -383,6 +395,76 @@ def _grounding_files(
     return {p: workspace[p] for p in paths if p in workspace}
 
 
+def _file_outline(path: str, content: str) -> dict[str, object]:
+    lines = content.splitlines()
+    first_code = ""
+    for line in lines[:30]:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith(("#", "//", "/*", "*", "--")):
+            continue
+        first_code = stripped[:120]
+        break
+    return {
+        "path": path,
+        "line_count": len(lines),
+        "char_count": len(content),
+        "first_code": first_code,
+    }
+
+
+def _workspace_manifest(workspace: dict[str, str]) -> list[dict[str, object]]:
+    items = [
+        _file_outline(path, content)
+        for path, content in sorted(workspace.items())
+    ]
+    return items[:_MAX_MANIFEST_FILES]
+
+
+def _prioritized_workspace_paths(
+    workspace: dict[str, str],
+    ticket: dict | None,
+    open_file: str | None,
+) -> list[str]:
+    ordered: list[str] = []
+
+    def add(path: str | None) -> None:
+        if not path or path not in workspace or path in ordered:
+            return
+        ordered.append(path)
+
+    add(open_file)
+    if ticket:
+        for path in ticket.get("related_files") or []:
+            add(path)
+
+    if open_file and "/" in open_file:
+        folder = open_file.rsplit("/", 1)[0] + "/"
+        for path in sorted(workspace):
+            if path.startswith(folder):
+                add(path)
+                if len(ordered) >= _MAX_CONTEXT_FILES:
+                    return ordered
+
+    for path in sorted(workspace):
+        add(path)
+        if len(ordered) >= _MAX_CONTEXT_FILES:
+            break
+
+    return ordered
+
+
+def _workspace_focus_files(
+    workspace: dict[str, str],
+    ticket: dict | None,
+    open_file: str | None,
+) -> dict[str, str]:
+    paths = _prioritized_workspace_paths(workspace, ticket, open_file)
+    selected = {path: workspace[path] for path in paths if path in workspace}
+    return _trim_grounding(selected)
+
+
 def _ticket_payload(challenge: CandidateChallenge | None) -> dict | None:
     if not challenge:
         return None
@@ -467,12 +549,48 @@ def _level_to_hint_level(level: LadderLevel) -> HintLevel:
 
 # ── response validation ─────────────────────────────────────────────────────
 
-def _has_required_sections(hint: str) -> bool:
-    return all(marker in hint for marker in _REQUIRED_SECTIONS)
+def _infer_candidate_tone(question: str) -> str:
+    text = question.strip()
+    if not text:
+        return "calm"
+    if _FRUSTRATED_TONE.search(text):
+        return "frustrated"
+    if _URGENT_TONE.search(text):
+        return "urgent"
+    if _ANALYTICAL_TONE.search(text):
+        return "analytical"
+    if len(text.split()) <= 4:
+        return "terse"
+    if any(token in text.lower() for token in ("yo", "sup", "bro", "pls", "gonna", "wanna")):
+        return "casual"
+    return "calm"
 
 
-def _has_changes_section(hint: str) -> bool:
-    return _CHANGES_SECTION in hint
+def _candidate_style_notes(question: str, *, greeting: bool, stuck_vague: bool) -> list[str]:
+    notes: list[str] = []
+    tone = _infer_candidate_tone(question)
+    if greeting:
+        notes.append("A brief greeting is okay, but keep it to one short line max.")
+    if tone == "frustrated":
+        notes.append("Acknowledge friction briefly, then reduce the problem to the smallest next step.")
+    elif tone == "urgent":
+        notes.append("Be concise and action-oriented.")
+    elif tone == "analytical":
+        notes.append("A slightly more explicit reasoning chain will help.")
+    elif tone == "casual":
+        notes.append("You can sound relaxed, but stay technically precise.")
+    elif tone == "terse":
+        notes.append("Keep the reply tight and concrete.")
+    if stuck_vague:
+        notes.append("They need momentum more than theory right now.")
+    return notes
+
+
+def _looks_substantive(hint: str) -> bool:
+    text = hint.strip()
+    if len(text) < 16:
+        return False
+    return len(text.split()) >= 4
 
 
 def _normalize_edits(
@@ -504,7 +622,7 @@ def _normalize_edits(
 
 
 def _clamp_hint_length(hint: str, max_words: int = 600) -> str:
-    """The v6 layout is structurally bounded — a generous ceiling is enough."""
+    """Keep Buddy helpful but not essay-length."""
     words = hint.split()
     if len(words) <= max_words:
         return hint
@@ -559,6 +677,12 @@ async def run(
         repeated=repeated_question,
     )
     hint_level: HintLevel = _level_to_hint_level(ladder_level)
+    candidate_tone = _infer_candidate_tone(req.question)
+    style_notes = _candidate_style_notes(
+        req.question,
+        greeting=greeting,
+        stuck_vague=stuck_vague,
+    )
 
     # Edits are gated by: explicit request, mode allowing L4, AND ladder reached L4.
     edits_allowed = explicit_code and mode != "STRICT" and ladder_level >= 4
@@ -568,7 +692,7 @@ async def run(
         return BuddyResponse(
             hint=_SCOPE_REDIRECT,
             hint_level="nudge",
-            blocked=True,
+            blocked=False,
             edits=[],
         )
 
@@ -582,8 +706,11 @@ async def run(
         )
 
     grounding = _trim_grounding(_grounding_files(workspace, ticket, req.open_file))
+    focus_files = _workspace_focus_files(workspace, ticket, req.open_file)
+    manifest = _workspace_manifest(workspace)
     if greeting and not shared_code:
         grounding = {}
+        focus_files = {}
     last_buddy = _last_buddy_message(history)
     avoid_repetition = bool(
         last_buddy
@@ -595,6 +722,8 @@ async def run(
         "active_ticket": ticket,
         "ticket_switched": ticket_switched,
         "ticket_grounding_files": grounding,
+        "workspace_focus_files": focus_files,
+        "workspace_codebase_map": manifest,
         "workspace_paths": sorted(workspace.keys()),
         "mode": mode,
         "hint_ladder_level": ladder_level,
@@ -617,6 +746,8 @@ async def run(
         "selection": req.selection,
         "recent_chat": history[-6:],
         "candidate_question": req.question,
+        "candidate_tone": candidate_tone,
+        "candidate_style_notes": style_notes,
     }
     if ticket_switched:
         log.info(
@@ -676,28 +807,27 @@ async def run(
             edits=[],
         )
 
-    # Structure validation: every non-blocked reply must carry the layout.
-    if not hint or not _has_required_sections(hint):
-        log.info("Buddy reply missing required sections; retrying with explicit reminder")
+    # Quality validation: keep the reply natural, but make sure it says something useful.
+    if not _looks_substantive(hint):
+        log.info("Buddy reply too thin; retrying with explicit usefulness reminder")
         try:
             data = await _call_buddy(
-                "Your previous reply did not include the required sections. "
-                "Emit EVERY section header literally: WHAT'S HAPPENING, ISSUES, "
-                "WHY THIS WORKS, THINK ABOUT THIS, NEXT STEP. Include CHANGES only "
-                "if you proposed edits. Use the exact emoji + uppercase headers."
+                "Your previous reply was too thin or generic. "
+                "Respond naturally, but anchor to the ticket, file, function, behavior, "
+                "or next debugging step. Keep it concise and useful."
             )
             hint = str(data.get("hint") or hint).strip()
         except Exception:  # noqa: BLE001 — retry is best-effort
             pass
 
-    # Anti-repetition: rerun once if the structured reply is too similar.
+    # Anti-repetition: rerun once if the reply is too similar.
     if _too_similar_to_last(hint, last_buddy):
         log.info("Buddy reply too similar to last message; retrying with new angle")
         try:
             data = await _call_buddy(
                 "Your last reply was too similar to your previous message. "
                 "Change angle — name a different concrete issue, point at a different "
-                "file/line, and give a different next step. Keep the section layout."
+                "file/line, and give a different next step. Keep the tone natural."
             )
             hint = str(data.get("hint") or hint).strip()
         except Exception:  # noqa: BLE001 — retry is best-effort

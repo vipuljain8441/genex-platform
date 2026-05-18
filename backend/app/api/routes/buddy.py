@@ -15,9 +15,19 @@ from app.models.schemas import (
     ChallengeKind,
     EventKind,
 )
+from app.services import sandbox
 from app.store import store
 
 router = APIRouter(prefix="/buddy", tags=["buddy"])
+
+
+async def _best_effort_workspace_snapshot(session_id: str, fallback: dict[str, str]) -> dict[str, str]:
+    """Use the latest sandbox files when available, otherwise keep the stored snapshot."""
+    try:
+        files = await sandbox.read_files(session_id)
+    except Exception:
+        files = {}
+    return files or fallback
 
 
 @router.post("/ask", response_model=BuddyResponse)
@@ -42,8 +52,25 @@ async def ask_buddy(req: BuddyRequest) -> BuddyResponse:
         if active_challenge and getattr(active_challenge, "buddy_mode", None)
         else req.mode
     )
+
+    session_workspace = await _best_effort_workspace_snapshot(
+        req.session_id,
+        dict(session.current_files),
+    )
+    if session_workspace != session.current_files:
+        session.current_files = session_workspace
+        await store.put_session(session)
+
+    merged_workspace = dict(session_workspace)
+    merged_workspace.update(req.workspace or {})
+
     enriched = BuddyRequest(
-        **{**req.model_dump(), "history": history, "mode": mode_override}
+        **{
+            **req.model_dump(),
+            "history": history,
+            "mode": mode_override,
+            "workspace": merged_workspace,
+        }
     )
 
     await store.append_buddy_turn(
@@ -55,7 +82,7 @@ async def ask_buddy(req: BuddyRequest) -> BuddyResponse:
             open_file=req.open_file,
             selection=req.selection,
             metadata={
-                "workspace_file_count": len(req.workspace or {}),
+                "workspace_file_count": len(merged_workspace),
             },
         ),
     )
