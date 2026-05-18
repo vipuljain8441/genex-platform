@@ -410,3 +410,124 @@ export type ReportAnalysis = {
   evidence: ReportEvidence[];
   generated_at: string;
 };
+
+export type PlaybackLineRange = {
+  start_line: number;
+  end_line: number;
+  change_type: string;
+};
+
+export type PlaybackFile = {
+  path: string;
+  language: string;
+  content: string;
+  total_lines: number;
+  touched_count: number;
+  last_active_at: string | null;
+};
+
+export type PlaybackStep = {
+  index: number;
+  at: string;
+  offset_seconds: number;
+  actor: "candidate" | "buddy" | "system";
+  kind: string;
+  title: string;
+  summary: string;
+  file_path: string | null;
+  panel: string | null;
+  challenge_id: string | null;
+  command: string | null;
+  stdout_preview: string | null;
+  stderr_preview: string | null;
+  line_ranges: PlaybackLineRange[];
+};
+
+export type PlaybackTranscriptEntry = {
+  at: string;
+  role: string;
+  content: string;
+  open_file: string | null;
+  challenge_id: string | null;
+};
+
+export type PlaybackTicket = {
+  id: string;
+  title: string;
+  description: string;
+  acceptance_criteria: string[];
+  priority: string;
+  labels: string[];
+  reporter: string;
+  assignee: string;
+};
+
+export type PlaybackChallenge = {
+  id: string;
+  kind: "coding" | "sql" | "objective" | "theory";
+  title: string;
+  description: string;
+  instructions: string;
+  acceptance_criteria: string[];
+  issues: {
+    id: string;
+    title: string;
+    description: string;
+    severity: "low" | "medium" | "high";
+  }[];
+  priority: "low" | "medium" | "high" | "critical";
+  labels: string[];
+  reporter: string;
+  assignee: string;
+  estimated_minutes: number;
+  related_files: string[];
+  workspace_enabled: boolean;
+  allow_buddy: boolean;
+  objective_questions: {
+    id: string;
+    prompt: string;
+    options: { id: string; text: string }[];
+    multi_select: boolean;
+    correct_option_ids: string[];
+    explanation: string;
+  }[];
+  expected_response_format: string;
+  editor_language: string;
+  starter_content: string;
+};
+
+export type PlaybackChallengeResponse = {
+  challenge_id: string;
+  challenge_kind: "coding" | "sql" | "objective" | "theory";
+  status: "pending" | "in_progress" | "completed";
+  answer_text: string;
+  selected_option_ids: Record<string, string[]>;
+  updated_at: string;
+};
+
+export type PlaybackStats = {
+  total_events: number;
+  files_touched: number;
+  terminal_commands: number;
+  buddy_messages: number;
+  challenge_switches: number;
+  duration_seconds: number;
+};
+
+export type PlaybackData = {
+  session_id: string;
+  candidate_name: string;
+  assessment_title: string;
+  started_at: string;
+  submitted_at: string | null;
+  duration_seconds: number;
+  workspace_note: string;
+  ticket: PlaybackTicket | null;
+  challenges: PlaybackChallenge[];
+  challenge_responses: Record<string, PlaybackChallengeResponse>;
+  initial_challenge_id: string | null;
+  files: PlaybackFile[];
+  steps: PlaybackStep[];
+  buddy_transcript: PlaybackTranscriptEntry[];
+  stats: PlaybackStats;
+};

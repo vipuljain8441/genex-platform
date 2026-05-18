@@ -343,6 +343,9 @@ async def run_file(session_id: str, body: RunIn) -> RunOut:
             "duration_ms": result.duration_ms,
             "timed_out": result.timed_out,
             "unsupported": result.unsupported,
+            "command": result.command,
+            "stdout_preview": result.stdout[:1200],
+            "stderr_preview": result.stderr[:1200],
         },
     ))
     return result
@@ -382,6 +385,8 @@ async def run_terminal_command(session_id: str, body: TerminalIn) -> RunOut:
             "duration_ms": result.duration_ms,
             "timed_out": result.timed_out,
             "unsupported": result.unsupported,
+            "stdout_preview": result.stdout[:1200],
+            "stderr_preview": result.stderr[:1200],
         },
     ))
     return result

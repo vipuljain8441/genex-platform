@@ -1,4 +1,4 @@
-import type { ReportAnalysis, ReportData, ReportPreviewData } from "./report-types";
+import type { PlaybackData, ReportAnalysis, ReportData, ReportPreviewData } from "./report-types";
 
 const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 const WS = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8000";
@@ -379,6 +379,8 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ force_refresh }),
     }),
+  getPlayback: (sid: string) =>
+    http<PlaybackData>(`/api/report/${sid}/playback`),
 
   // ── GitHub ──────────────────────────────────────────────────────────────
   getGitHubInfo: (repo_url: string) =>

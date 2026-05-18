@@ -6,6 +6,7 @@ from pydantic import BaseModel
 
 from app.models.schemas import Assessment, CandidateSession, EvaluationResult
 from app.services.heatmap import build_heatmap
+from app.services.playback import PlaybackData, build_playback
 from app.services.report import ReportData, build_report
 from app.store import store
 
@@ -60,3 +61,21 @@ async def get_report_events(session_id: str) -> list[dict]:
         raise HTTPException(404, "session not found")
     events = await store.get_events(session_id)
     return [event.model_dump(mode="json") for event in events]
+
+
+@router.get("/{session_id}/playback")
+async def get_playback(session_id: str) -> PlaybackData:
+    session = await store.get_session(session_id)
+    if not session:
+        raise HTTPException(404, "session not found")
+    assessment = await store.get_assessment(session.assessment_id)
+    if not assessment:
+        raise HTTPException(404, "assessment not found")
+    events = await store.get_events(session_id)
+    buddy_history = await store.get_buddy_history(session_id)
+    return build_playback(
+        session=session,
+        assessment=assessment,
+        events=events,
+        buddy_history=buddy_history,
+    )
