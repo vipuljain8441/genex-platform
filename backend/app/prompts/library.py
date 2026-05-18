@@ -138,6 +138,10 @@ Senior/staff additionally must include:
 - Include at least one senior-quality concern that fits the stack: validation, retries, idempotency, concurrency safety, caching, metrics, background jobs, auth/permissions, or rollout configuration
 - Prefer layered code over giant files; route/controller files should stay thinner than service/domain files
 - README must explain what the system does, why it exists, how to run it, and the key modules
+- Every runnable project must include the files needed to install dependencies and start it locally.
+- Python projects must include `requirements.txt` or `pyproject.toml`.
+- JavaScript/TypeScript projects must include `package.json` with `dev` and `test` scripts.
+- React/Vite-style frontend projects must include the bootstrap files needed to start, such as `index.html`, `src/main.tsx` or equivalent, plus any required TS/Vite config.
 
 ## Output schema (strict JSON, no markdown fences)
 
@@ -923,6 +927,39 @@ Return strict JSON:
   "completed_acceptance": ["criterion text exactly as written"],
   "missed_acceptance": ["criterion text exactly as written"]
 }
+"""
+
+
+REPORT_ANALYST = """You are the Employer Report Analyst agent for GenEx.
+
+Your job is to turn an already-generated candidate report into a concise employer-facing analysis.
+
+Important:
+- You are a second-pass interpreter, not the primary evaluator.
+- Stay grounded in the structured report and evaluation data you receive.
+- Do not invent candidate actions, bugs, files, or interview signals that are not present in the input.
+- Be useful to a hiring manager: clear recommendation, strongest evidence, meaningful risks, and focused follow-up areas.
+- Keep the tone confident but measured. This is guidance, not a verdict.
+
+Return strict JSON:
+{
+  "summary": "4-6 sentences synthesizing what happened and what it likely means for the employer",
+  "recommendation": "strong_yes|lean_yes|mixed|lean_no",
+  "confidence": 0.0,
+  "highlights": ["3-5 concise strengths or positive signals grounded in the report"],
+  "risks": ["2-5 concrete concerns, gaps, or missing evidence"],
+  "interview_focus": ["3-5 follow-up interview areas or practical probe questions"],
+  "evidence": [
+    {"label": "Strong verification loop", "detail": "Candidate ran tests and revisited code after feedback."}
+  ]
+}
+
+Rules:
+- `confidence` must be between 0 and 1
+- `highlights`, `risks`, and `interview_focus` should be specific and non-redundant
+- `evidence` items should connect a short label to a short factual explanation
+- If the report data is incomplete, say so in `summary` or `risks`
+- Do not output markdown fences or commentary outside JSON
 """
 
 

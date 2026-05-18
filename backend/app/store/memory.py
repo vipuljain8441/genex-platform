@@ -16,6 +16,7 @@ from app.models.schemas import (
     CandidateSession,
     EvaluationResult,
     Invite,
+    ReportAnalysis,
 )
 
 
@@ -28,6 +29,7 @@ class MemoryStore:
         self.events: dict[str, list[ActivityEvent]] = defaultdict(list)
         self.buddy_history: dict[str, list[BuddyTurn]] = defaultdict(list)
         self.evaluations: dict[str, EvaluationResult] = {}
+        self.report_analyses: dict[str, ReportAnalysis] = {}
         self.invites: dict[str, Invite] = {}  # token → invite
         self.invites_by_assessment: dict[str, list[str]] = defaultdict(list)
 
@@ -96,6 +98,12 @@ class MemoryStore:
 
     async def get_evaluation(self, session_id: str) -> EvaluationResult | None:
         return self.evaluations.get(session_id)
+
+    async def put_report_analysis(self, analysis: ReportAnalysis) -> None:
+        self.report_analyses[analysis.session_id] = analysis
+
+    async def get_report_analysis(self, session_id: str) -> ReportAnalysis | None:
+        return self.report_analyses.get(session_id)
 
     # ── Invites ───────────────────────────────────────────────────────────
     async def put_invite(self, invite: Invite) -> None:

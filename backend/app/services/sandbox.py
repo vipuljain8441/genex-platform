@@ -1,8 +1,8 @@
-"""Sandbox session management — delegates all file I/O to the sync server
+"""Sandbox session management — delegates workspace operations to the sync server
 running inside the code-server container (port 8081).
 
-The sync server owns the filesystem, git, and SQLite operations. The backend
-only needs to speak HTTP to it.
+The sync server owns the filesystem, command execution, git, and SQLite
+operations. The backend only needs to speak HTTP to it.
 """
 from __future__ import annotations
 
@@ -143,6 +143,29 @@ async def run_sql(session_id: str, query: str) -> dict:
         resp = await client.post(
             _sync_url(f"sql/{session_id}"),
             json={"query": query},
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+
+async def run_command(
+    session_id: str,
+    argv: list[str],
+    *,
+    command: str = "",
+    timeout_seconds: int = 10,
+    output_cap: int = 8000,
+) -> dict:
+    """Execute a command inside the sandbox workspace."""
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        resp = await client.post(
+            _sync_url(f"exec/{session_id}"),
+            json={
+                "argv": argv,
+                "command": command,
+                "timeout_seconds": timeout_seconds,
+                "output_cap": output_cap,
+            },
         )
         resp.raise_for_status()
         return resp.json()

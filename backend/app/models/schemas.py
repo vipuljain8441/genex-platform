@@ -500,4 +500,21 @@ class EvaluationResult(BaseModel):
     generated_at: datetime = Field(default_factory=_now)
 
 
+class ReportEvidence(BaseModel):
+    label: str
+    detail: str
+
+
+class ReportAnalysis(BaseModel):
+    session_id: str
+    summary: str
+    recommendation: Literal["strong_yes", "lean_yes", "mixed", "lean_no"] = "mixed"
+    confidence: float = 0.5
+    highlights: list[str] = Field(default_factory=list)
+    risks: list[str] = Field(default_factory=list)
+    interview_focus: list[str] = Field(default_factory=list)
+    evidence: list[ReportEvidence] = Field(default_factory=list)
+    generated_at: datetime = Field(default_factory=_now)
+
+
 CandidateSession.model_rebuild()

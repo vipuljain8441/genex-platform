@@ -102,11 +102,247 @@ def _readme(job: JobSpec, context: ExtractedContext, run_steps: str, file_map: l
     )
 
 
+def _find_file(files: list[CodeFile], path: str) -> CodeFile | None:
+    target = path.lower()
+    for file in files:
+        if file.path.lower() == target:
+            return file
+    return None
+
+
+def _upsert_file(files: list[CodeFile], path: str, language: str, content: str) -> None:
+    existing = _find_file(files, path)
+    if existing:
+        existing.language = language
+        existing.content = content
+        return
+    files.append(CodeFile(path=path, language=language, content=content))
+
+
+def _has_suffix(files: list[CodeFile], *suffixes: str) -> bool:
+    lowered = tuple(suffix.lower() for suffix in suffixes)
+    return any(file.path.lower().endswith(lowered) for file in files)
+
+
+def _has_prefix(files: list[CodeFile], prefix: str) -> bool:
+    target = prefix.lower()
+    return any(file.path.lower().startswith(target) for file in files)
+
+
+def _python_requirements(job: JobSpec, files: list[CodeFile]) -> str:
+    role = job.role_family.value if hasattr(job.role_family, "value") else str(job.role_family)
+    requirements = ["pytest"]
+    file_text = "\n".join(file.content.lower() for file in files[:12])
+    if role in {"backend", "qa"} or "fastapi" in file_text:
+        requirements = ["fastapi", "uvicorn", "pytest", "httpx"]
+    elif "pandas" in file_text:
+        requirements = ["pandas", "pytest"]
+    elif "numpy" in file_text:
+        requirements = ["numpy", "pytest"]
+    return "\n".join(dict.fromkeys(requirements)) + "\n"
+
+
+def _frontend_package_json(job: JobSpec, *, fullstack: bool) -> str:
+    title = _slug(job.title, "assessment-app")
+    scripts = (
+        '    "dev": "concurrently \\"npm run dev:api\\" \\"npm run dev:web\\"",\n'
+        '    "dev:api": "tsx watch backend/server.ts",\n'
+        '    "dev:web": "vite --config vite.config.ts --host 0.0.0.0 --port 3000",\n'
+        '    "build": "vite build --config vite.config.ts",\n'
+        '    "test": "vitest run"\n'
+        if fullstack
+        else '    "dev": "vite --host 0.0.0.0 --port 3000",\n'
+             '    "build": "vite build",\n'
+             '    "test": "vitest run"\n'
+    )
+    dependencies = (
+        '    "express": "^4.21.2",\n'
+        '    "react": "^18.3.1",\n'
+        '    "react-dom": "^18.3.1"\n'
+        if fullstack
+        else '    "react": "^18.3.1",\n'
+             '    "react-dom": "^18.3.1"\n'
+    )
+    dev_dependencies = (
+        '    "@types/express": "^5.0.3",\n'
+        '    "@types/node": "^22.15.30",\n'
+        '    "@types/react": "^18.3.12",\n'
+        '    "@types/react-dom": "^18.3.1",\n'
+        '    "@vitejs/plugin-react": "^4.3.4",\n'
+        '    "concurrently": "^9.1.2",\n'
+        '    "tsx": "^4.19.4",\n'
+        '    "typescript": "^5.8.3",\n'
+        '    "vite": "^5.4.10",\n'
+        '    "vitest": "^2.1.8"\n'
+        if fullstack
+        else '    "@types/react": "^18.3.12",\n'
+             '    "@types/react-dom": "^18.3.1",\n'
+             '    "@vitejs/plugin-react": "^4.3.4",\n'
+             '    "jsdom": "^25.0.1",\n'
+             '    "typescript": "^5.8.3",\n'
+             '    "vite": "^5.4.10",\n'
+             '    "vitest": "^2.1.8"\n'
+    )
+    return (
+        "{\n"
+        f'  "name": "{title}",\n'
+        '  "private": true,\n'
+        '  "version": "0.1.0",\n'
+        '  "type": "module",\n'
+        '  "scripts": {\n'
+        f"{scripts}"
+        "  },\n"
+        '  "dependencies": {\n'
+        f"{dependencies}"
+        "  },\n"
+        '  "devDependencies": {\n'
+        f"{dev_dependencies}"
+        "  }\n"
+        "}\n"
+    )
+
+
+def _typescript_tsconfig(fullstack: bool) -> str:
+    include = '["src", "tests", "vite.config.ts"]' if not fullstack else '["backend", "frontend/src", "shared", "tests", "vite.config.ts"]'
+    return (
+        "{\n"
+        '  "compilerOptions": {\n'
+        '    "target": "ES2020",\n'
+        '    "useDefineForClassFields": true,\n'
+        '    "lib": ["ES2020", "DOM", "DOM.Iterable"],\n'
+        '    "module": "ESNext",\n'
+        '    "skipLibCheck": true,\n'
+        '    "moduleResolution": "Bundler",\n'
+        '    "allowImportingTsExtensions": true,\n'
+        '    "resolveJsonModule": true,\n'
+        '    "isolatedModules": true,\n'
+        '    "noEmit": true,\n'
+        '    "jsx": "react-jsx",\n'
+        '    "strict": true\n'
+        "  },\n"
+        f'  "include": {include}\n'
+        "}\n"
+    )
+
+
+def _vite_config(fullstack: bool) -> str:
+    if fullstack:
+        return (
+            "import { defineConfig } from 'vite';\n"
+            "import react from '@vitejs/plugin-react';\n\n"
+            "export default defineConfig({\n"
+            "  root: 'frontend',\n"
+            "  plugins: [react()],\n"
+            "  server: {\n"
+            "    proxy: {\n"
+            "      '/api': 'http://localhost:3001',\n"
+            "      '/health': 'http://localhost:3001',\n"
+            "    },\n"
+            "  },\n"
+            "  test: {\n"
+            "    environment: 'node',\n"
+            "  },\n"
+            "});\n"
+        )
+    return (
+        "import { defineConfig } from 'vite';\n"
+        "import react from '@vitejs/plugin-react';\n\n"
+        "export default defineConfig({\n"
+        "  plugins: [react()],\n"
+        "  test: {\n"
+        "    environment: 'node',\n"
+        "  },\n"
+        "});\n"
+    )
+
+
+def _index_html(title: str) -> str:
+    return (
+        "<!doctype html>\n"
+        "<html lang=\"en\">\n"
+        "  <head>\n"
+        "    <meta charset=\"UTF-8\" />\n"
+        "    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\" />\n"
+        f"    <title>{title}</title>\n"
+        "  </head>\n"
+        "  <body>\n"
+        "    <div id=\"root\"></div>\n"
+        "    <script type=\"module\" src=\"/src/main.tsx\"></script>\n"
+        "  </body>\n"
+        "</html>\n"
+    )
+
+
+def _main_tsx(import_path: str) -> str:
+    return (
+        "import React from 'react';\n"
+        "import ReactDOM from 'react-dom/client';\n\n"
+        f"import App from '{import_path}';\n\n"
+        "ReactDOM.createRoot(document.getElementById('root')!).render(\n"
+        "  <React.StrictMode>\n"
+        "    <App />\n"
+        "  </React.StrictMode>,\n"
+        ");\n"
+    )
+
+
+def _normalize_runtime_metadata(
+    job: JobSpec,
+    files: list[CodeFile],
+    setup_instructions: str,
+) -> tuple[list[CodeFile], str]:
+    has_python = _has_suffix(files, ".py")
+    has_node = _has_suffix(files, ".ts", ".tsx", ".js", ".jsx")
+    has_react = _has_suffix(files, ".tsx", ".jsx")
+    has_fullstack_frontend = _has_prefix(files, "frontend/")
+    fullstack = has_fullstack_frontend and _has_prefix(files, "backend/")
+
+    if has_python and not _has_suffix(files, "requirements.txt", "pyproject.toml"):
+        _upsert_file(files, "requirements.txt", "text", _python_requirements(job, files))
+    if has_python and _find_file(files, "pipeline/main.py") and "__main__" not in (_find_file(files, "pipeline/main.py") or CodeFile(path="", language="", content="")).content:
+        main_file = _find_file(files, "pipeline/main.py")
+        if main_file:
+            main_file.content = (
+                main_file.content.rstrip()
+                + "\n\n\nif __name__ == '__main__':\n"
+                "    print(run_pipeline())\n"
+            )
+
+    if has_node and not _find_file(files, "package.json"):
+        _upsert_file(files, "package.json", "json", _frontend_package_json(job, fullstack=fullstack))
+    if has_node and _has_suffix(files, ".ts", ".tsx") and not _find_file(files, "tsconfig.json"):
+        _upsert_file(files, "tsconfig.json", "json", _typescript_tsconfig(fullstack))
+    if has_react:
+        root_prefix = "frontend/" if has_fullstack_frontend else ""
+        main_path = f"{root_prefix}src/main.tsx"
+        index_path = f"{root_prefix}index.html"
+        if not _find_file(files, main_path):
+            _upsert_file(files, main_path, "typescript", _main_tsx("./App"))
+        if not _find_file(files, index_path):
+            _upsert_file(files, index_path, "html", _index_html(job.title))
+        if not _find_file(files, "vite.config.ts"):
+            _upsert_file(files, "vite.config.ts", "typescript", _vite_config(fullstack))
+
+    instructions = setup_instructions.strip()
+    if instructions:
+        return files, instructions
+    if fullstack:
+        return files, "1. `npm install`\n2. `npm run dev`\n3. `npm test`"
+    if has_react or has_node:
+        return files, "1. `npm install`\n2. `npm run dev`\n3. `npm test`"
+    if has_python:
+        if _find_file(files, "pipeline/main.py"):
+            return files, "1. `pip install -r requirements.txt`\n2. `python -m pipeline.main`\n3. `pytest`"
+        return files, "1. `pip install -r requirements.txt`\n2. `uvicorn app.main:app --reload`\n3. `pytest`"
+    return files, instructions
+
+
 def _python_backend_files(job: JobSpec, context: ExtractedContext) -> list[CodeFile]:
     domain_label, singular, plural = _domain_terms(job, context)
     module = _slug(singular.replace(" ", "_"), "work_item")
     plural_var = plural.replace(" ", "_")
     files = [
+        CodeFile(path="requirements.txt", language="text", content="fastapi\nuvicorn\npytest\nhttpx\n"),
         CodeFile(
             path="app/main.py",
             language="python",
@@ -261,7 +497,7 @@ def _python_backend_files(job: JobSpec, context: ExtractedContext) -> list[CodeF
             content=_readme(
                 job,
                 context,
-                "1. `pip install fastapi uvicorn pytest`\n2. `uvicorn app.main:app --reload`\n3. `pytest`",
+                "1. `pip install -r requirements.txt`\n2. `uvicorn app.main:app --reload`\n3. `pytest`",
                 readme_paths,
             ),
         )
@@ -272,6 +508,11 @@ def _python_backend_files(job: JobSpec, context: ExtractedContext) -> list[CodeF
 def _typescript_frontend_files(job: JobSpec, context: ExtractedContext) -> list[CodeFile]:
     domain_label, singular, plural = _domain_terms(job, context)
     files = [
+        CodeFile(path="package.json", language="json", content=_frontend_package_json(job, fullstack=False)),
+        CodeFile(path="tsconfig.json", language="json", content=_typescript_tsconfig(False)),
+        CodeFile(path="vite.config.ts", language="typescript", content=_vite_config(False)),
+        CodeFile(path="index.html", language="html", content=_index_html(job.title)),
+        CodeFile(path="src/main.tsx", language="typescript", content=_main_tsx("./App")),
         CodeFile(
             path="src/App.tsx",
             language="typescript",
@@ -411,6 +652,11 @@ def _typescript_frontend_files(job: JobSpec, context: ExtractedContext) -> list[
 def _typescript_fullstack_files(job: JobSpec, context: ExtractedContext) -> list[CodeFile]:
     domain_label, singular, plural = _domain_terms(job, context)
     files = [
+        CodeFile(path="package.json", language="json", content=_frontend_package_json(job, fullstack=True)),
+        CodeFile(path="tsconfig.json", language="json", content=_typescript_tsconfig(True)),
+        CodeFile(path="vite.config.ts", language="typescript", content=_vite_config(True)),
+        CodeFile(path="frontend/index.html", language="html", content=_index_html(job.title)),
+        CodeFile(path="frontend/src/main.tsx", language="typescript", content=_main_tsx("./App")),
         CodeFile(
             path="backend/server.ts",
             language="typescript",
@@ -418,6 +664,7 @@ def _typescript_fullstack_files(job: JobSpec, context: ExtractedContext) -> list
                 "import express from 'express';\n"
                 "import { createItem, listItems } from './service';\n\n"
                 "const app = express();\n"
+                "const port = Number(process.env.PORT || 3001);\n"
                 "app.use(express.json());\n\n"
                 "app.get('/health', (_req, res) => res.json({ status: 'ok' }));\n"
                 "app.get('/api/items', (_req, res) => res.json(listItems()));\n"
@@ -428,7 +675,9 @@ def _typescript_fullstack_files(job: JobSpec, context: ExtractedContext) -> list
                 "    res.status(400).json({ detail: error instanceof Error ? error.message : 'Unknown error' });\n"
                 "  }\n"
                 "});\n\n"
-                "app.listen(3001);\n"
+                "app.listen(port, () => {\n"
+                "  console.log(`api listening on ${port}`);\n"
+                "});\n"
             ),
         ),
         CodeFile(
@@ -563,7 +812,8 @@ def _typescript_fullstack_files(job: JobSpec, context: ExtractedContext) -> list
 def _data_files(job: JobSpec, context: ExtractedContext) -> list[CodeFile]:
     domain_label, singular, plural = _domain_terms(job, context)
     files = [
-        CodeFile(path="pipeline/main.py", language="python", content="from pipeline.transform import normalize_records\nfrom pipeline.load import load_records\nfrom pipeline.extract import read_source\n\n\ndef run_pipeline() -> int:\n    rows = read_source()\n    normalized = normalize_records(rows)\n    return load_records(normalized)\n"),
+        CodeFile(path="requirements.txt", language="text", content="pytest\n"),
+        CodeFile(path="pipeline/main.py", language="python", content="from pipeline.transform import normalize_records\nfrom pipeline.load import load_records\nfrom pipeline.extract import read_source\n\n\ndef run_pipeline() -> int:\n    rows = read_source()\n    normalized = normalize_records(rows)\n    return load_records(normalized)\n\n\nif __name__ == '__main__':\n    print(run_pipeline())\n"),
         CodeFile(path="pipeline/extract.py", language="python", content=f"def read_source() -> list[dict[str, str]]:\n    return [{{'id': 'row-1', 'name': 'daily-{singular.replace(' ', '-')}', 'owner': 'analytics'}}]\n"),
         CodeFile(path="pipeline/transform.py", language="python", content="def normalize_records(rows: list[dict[str, str]]) -> list[dict[str, str]]:\n    normalized: list[dict[str, str]] = []\n    for row in rows:\n        normalized.append({'id': row['id'], 'name': row['name'].strip().lower(), 'owner': row['owner'].strip().lower()})\n    return normalized\n"),
         CodeFile(path="pipeline/load.py", language="python", content="from pipeline.models import LoadSummary\n\n\ndef load_records(rows: list[dict[str, str]]) -> int:\n    summary = LoadSummary(processed=len(rows), duplicates=0)\n    return summary.processed - summary.duplicates\n"),
@@ -572,7 +822,7 @@ def _data_files(job: JobSpec, context: ExtractedContext) -> list[CodeFile]:
         CodeFile(path="tests/test_pipeline.py", language="python", content="from pipeline.main import run_pipeline\n\n\ndef test_run_pipeline_returns_count() -> None:\n    assert run_pipeline() == 1\n"),
     ]
     readme_paths = [file.path for file in files]
-    files.append(CodeFile(path="README.md", language="markdown", content=_readme(job, context, "1. `python -m pipeline.main`\n2. `pytest`", readme_paths)))
+    files.append(CodeFile(path="README.md", language="markdown", content=_readme(job, context, "1. `pip install -r requirements.txt`\n2. `python -m pipeline.main`\n3. `pytest`", readme_paths)))
     return files
 
 
@@ -633,16 +883,25 @@ def _needs_fallback(files: list[CodeFile], expected_min: int) -> bool:
     lowered = [file.path.lower() for file in files]
     has_readme = any(path.endswith("readme.md") for path in lowered)
     has_test = any("test" in path or "spec" in path for path in lowered)
+    has_python = any(path.endswith(".py") for path in lowered)
+    has_node = any(path.endswith((".ts", ".tsx", ".js", ".jsx")) for path in lowered)
+    has_requirements = any(path.endswith(("requirements.txt", "pyproject.toml")) for path in lowered)
+    has_package_json = any(path.endswith("package.json") for path in lowered)
+    if has_python and not has_requirements:
+        return True
+    if has_node and not has_package_json:
+        return True
     return not has_readme or not has_test
 
 
 def _build_fallback_codebase(job: JobSpec, context: ExtractedContext, reason: str) -> Codebase:
     files = _fallback_files(job, context)
+    files, setup_instructions = _normalize_runtime_metadata(job, files, "")
     log.warning("code_author: using local scaffold fallback because %s", reason)
     return Codebase(
         artifact_kind=ArtifactKind.CODE,
         entry_point=_guess_entry_point(files),
-        setup_instructions="See README for local setup steps.",
+        setup_instructions=setup_instructions,
         files=files,
     )
 
@@ -671,6 +930,12 @@ async def run(job: JobSpec, context: ExtractedContext, review_feedback: str = ""
     if not files:
         return _build_fallback_codebase(job, context, "no valid files returned")
 
+    files, setup_instructions = _normalize_runtime_metadata(
+        job,
+        files,
+        data.get("setup_instructions", ""),
+    )
+
     if _needs_fallback(files, expected_min):
         return _build_fallback_codebase(
             job,
@@ -689,6 +954,6 @@ async def run(job: JobSpec, context: ExtractedContext, review_feedback: str = ""
     return Codebase(
         artifact_kind=artifact_kind_enum,
         entry_point=entry_point,
-        setup_instructions=data.get("setup_instructions", ""),
+        setup_instructions=setup_instructions,
         files=files,
     )

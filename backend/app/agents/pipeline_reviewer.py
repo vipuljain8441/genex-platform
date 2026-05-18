@@ -138,6 +138,10 @@ def local_codebase_review(
         reasons.append("The codebase is missing a README that explains setup and intent.")
     if not _has_any_path(file_paths, "test", "spec"):
         reasons.append("The codebase is missing a realistic test file.")
+    if any(path.endswith(".py") for path in file_paths) and not _has_any_path(file_paths, "requirements.txt", "pyproject.toml"):
+        reasons.append("Python projects must include a dependency manifest such as requirements.txt or pyproject.toml.")
+    if any(path.endswith((".ts", ".tsx", ".js", ".jsx")) for path in file_paths) and not _has_any_path(file_paths, "package.json"):
+        reasons.append("JavaScript/TypeScript projects must include package.json with runnable scripts.")
 
     if role in _ROLE_FILE_HINTS:
         matched_hints = sum(

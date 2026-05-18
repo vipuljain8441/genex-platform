@@ -246,6 +246,25 @@ class FeedbackEntry(TypedDict):
     created_at: str
 
 
+class ReportPreviewSnapshot(TypedDict):
+    fixed_bugs: int
+    total_bugs: int
+    ai_prompt_count: int
+    files_touched: int
+    terminal_commands: int
+    highlights: list[str]
+
+
+class ReportPreviewData(TypedDict):
+    available: bool
+    header: CandidateHeader
+    cq: CQOverview | None
+    metrics: list[MetricScore]
+    snapshot: ReportPreviewSnapshot
+    lock_reason: str
+    unlock_label: str
+
+
 class ReportData(TypedDict):
     available: bool  # false until evaluation exists
     header: CandidateHeader
@@ -981,4 +1000,41 @@ def build_report(
         feedback_log=feedback_log,
         playback_url=f"/playback/{session.id}",
         heatmap=heatmap,
+    )
+
+
+def build_report_preview(report: ReportData) -> ReportPreviewData:
+    highlights: list[str] = []
+    if report["cq"]:
+        highlights.append(f"CQ score {report['cq']['score']} based on evaluator and behaviour signals.")
+    highlights.append(
+        f"{report['bug_exposure']['fixed_count']} of {report['bug_exposure']['total']} tracked issue(s) were marked fixed."
+    )
+    if report["ai"]["prompt_count"]:
+        highlights.append(
+            f"Candidate used Buddy {report['ai']['prompt_count']} time(s) during the session."
+        )
+    if report["behaviour"]["verification"]["ran_tests"]:
+        highlights.append("Verification signals show the candidate ran tests or code before submitting.")
+    else:
+        highlights.append("Verification signals were limited, so manual review is still important.")
+
+    return ReportPreviewData(
+        available=report["available"],
+        header=report["header"],
+        cq=report["cq"],
+        metrics=report["metrics"][:3],
+        snapshot=ReportPreviewSnapshot(
+            fixed_bugs=report["bug_exposure"]["fixed_count"],
+            total_bugs=report["bug_exposure"]["total"],
+            ai_prompt_count=report["ai"]["prompt_count"],
+            files_touched=report["behaviour"]["total_files_opened"],
+            terminal_commands=report["heatmap"]["totals_by_kind"].get("terminal_command", 0),
+            highlights=highlights[:4],
+        ),
+        lock_reason=(
+            "The full employer report stays gated until you explicitly unlock it. "
+            "That keeps the premium review flow intentional and leaves room for future metering."
+        ),
+        unlock_label="Unlock full employer report",
     )

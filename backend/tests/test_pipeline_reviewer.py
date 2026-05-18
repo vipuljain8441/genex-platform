@@ -72,6 +72,26 @@ class PipelineReviewerTests(unittest.TestCase):
         self.assertFalse(review["approved"])
         self.assertTrue(any("generic e-commerce" in reason.lower() for reason in review["reasons"]))
 
+    def test_rejects_python_codebase_without_dependency_manifest(self) -> None:
+        review = local_codebase_review(
+            make_job(),
+            make_context(),
+            Codebase(
+                artifact_kind=ArtifactKind.CODE,
+                entry_point="app/main.py",
+                setup_instructions="pip install fastapi && uvicorn app.main:app --reload",
+                files=[
+                    CodeFile(path="app/main.py", language="python", content="from fastapi import FastAPI\napp = FastAPI()"),
+                    CodeFile(path="app/routes.py", language="python", content="from fastapi import APIRouter\nrouter = APIRouter()"),
+                    CodeFile(path="app/service.py", language="python", content="def schedule_visit() -> None:\n    return None"),
+                    CodeFile(path="tests/test_app.py", language="python", content="def test_health():\n    assert True"),
+                    CodeFile(path="README.md", language="markdown", content="healthcare scheduling service"),
+                ],
+            ),
+        )
+        self.assertFalse(review["approved"])
+        self.assertTrue(any("dependency manifest" in reason.lower() for reason in review["reasons"]))
+
     def test_rejects_thin_generic_assessment_plan(self) -> None:
         job = make_job()
         context = make_context()

@@ -1,13 +1,8 @@
 """Candidate-side endpoints: start session, read workspace, save edits, submit, run code."""
 from __future__ import annotations
 
-import asyncio
 import shlex
-import shutil
-import tempfile
-import time
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException
@@ -23,6 +18,7 @@ from app.models.schemas import (
     EventKind,
     FeedbackCategory,
 )
+from app.services import sandbox
 from app.store import store
 
 router = APIRouter(prefix="/candidate", tags=["candidate"])
@@ -36,8 +32,8 @@ LANG_RUNNERS: dict[str, list[str]] = {
     ".js": ["node"],
     ".mjs": ["node"],
     ".cjs": ["node"],
-    ".ts": ["npx", "--yes", "tsx"],
-    ".tsx": ["npx", "--yes", "tsx"],
+    ".ts": ["tsx"],
+    ".tsx": ["tsx"],
     ".sh": ["bash"],
 }
 
@@ -287,80 +283,38 @@ async def _execute_workspace_command(
     cmd: list[str],
     unsupported_command: str,
 ) -> RunOut:
-    if not cmd:
-        return RunOut(
-            stdout="",
-            stderr="No command provided.",
-            exit_code=-1,
-            duration_ms=0,
-            command="",
-            unsupported=True,
-        )
-    if shutil.which(cmd[0]) is None:
-        return RunOut(
-            stdout="",
-            stderr=f"Runtime '{cmd[0]}' not found on PATH.",
-            exit_code=-1,
-            duration_ms=0,
-            command=unsupported_command,
-            unsupported=True,
-        )
-    started = time.monotonic()
-    with tempfile.TemporaryDirectory(prefix="genex_run_") as td:
-        root = Path(td)
-        # Write the entire workspace so the target file's imports resolve.
-        for path, content in session.current_files.items():
-            full = root / path
-            full.parent.mkdir(parents=True, exist_ok=True)
-            full.write_text(content)
+    result = await sandbox.run_command(
+        session.id,
+        cmd,
+        command=unsupported_command,
+        timeout_seconds=RUN_TIMEOUT_SECONDS,
+        output_cap=RUN_OUTPUT_CAP,
+    )
+    return RunOut(**result)
 
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                cwd=root,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-        except FileNotFoundError as e:
-            return RunOut(
-                stdout="", stderr=f"Failed to start runtime: {e}",
-                exit_code=-1, duration_ms=0, command=" ".join(cmd), unsupported=True,
-            )
 
-        timed_out = False
-        try:
-            stdout_b, stderr_b = await asyncio.wait_for(
-                proc.communicate(), timeout=RUN_TIMEOUT_SECONDS
-            )
-        except asyncio.TimeoutError:
-            proc.kill()
-            await proc.wait()
-            stdout_b, stderr_b = b"", f"\n--- timed out after {RUN_TIMEOUT_SECONDS}s ---\n".encode()
-            timed_out = True
-
-        duration_ms = int((time.monotonic() - started) * 1000)
-        result = RunOut(
-            stdout=stdout_b.decode("utf-8", errors="replace")[:RUN_OUTPUT_CAP],
-            stderr=stderr_b.decode("utf-8", errors="replace")[:RUN_OUTPUT_CAP],
-            exit_code=proc.returncode if proc.returncode is not None else -1,
-            duration_ms=duration_ms,
-            command=" ".join(cmd),
-            timed_out=timed_out,
-        )
-    return result
+async def _prepare_workspace_for_execution(session: CandidateSession) -> CandidateSession:
+    """Run commands against the live sandbox workspace when available."""
+    try:
+        files = await sandbox.read_files(session.id)
+        if not files:
+            await sandbox.provision(session.id, session.current_files)
+            files = await sandbox.read_files(session.id)
+    except RuntimeError as exc:
+        raise HTTPException(503, str(exc)) from exc
+    if files and files != session.current_files:
+        session.current_files = files
+        await store.put_session(session)
+    return session
 
 
 @router.post("/sessions/{session_id}/run", response_model=RunOut)
 async def run_file(session_id: str, body: RunIn) -> RunOut:
-    """Execute the candidate's current file content in a sandboxed temp dir.
-
-    Caveats:
-    - Local-process execution, no container — fine for hackathon, not for prod.
-    - 10s timeout, capped output, no network restrictions.
-    """
+    """Execute the candidate's current file content in the live sandbox workspace."""
     session = await store.get_session(session_id)
     if not session:
         raise HTTPException(404, "session not found")
+    session = await _prepare_workspace_for_execution(session)
     if body.file_path not in session.current_files:
         raise HTTPException(404, f"file not in session: {body.file_path}")
 
@@ -399,6 +353,7 @@ async def run_terminal_command(session_id: str, body: TerminalIn) -> RunOut:
     session = await store.get_session(session_id)
     if not session:
         raise HTTPException(404, "session not found")
+    session = await _prepare_workspace_for_execution(session)
 
     command = body.command.strip()
     if not command:

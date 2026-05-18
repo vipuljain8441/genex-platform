@@ -20,6 +20,7 @@ from app.models.schemas import (
     CandidateSession,
     EvaluationResult,
     Invite,
+    ReportAnalysis,
 )
 
 
@@ -108,6 +109,12 @@ class PostgresStore:
                     on buddy_turns (session_id, at);
 
                 create table if not exists evaluations (
+                    session_id text primary key,
+                    generated_at timestamptz not null,
+                    data jsonb not null
+                );
+
+                create table if not exists report_analyses (
                     session_id text primary key,
                     generated_at timestamptz not null,
                     data jsonb not null
@@ -317,6 +324,32 @@ class PostgresStore:
         if row is None:
             return None
         return EvaluationResult(**_load(row["data"]))
+
+    async def put_report_analysis(self, analysis: ReportAnalysis) -> None:
+        pool = self._require_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                insert into report_analyses (session_id, generated_at, data)
+                values ($1, $2, $3::jsonb)
+                on conflict (session_id) do update set
+                    generated_at = excluded.generated_at,
+                    data = excluded.data
+                """,
+                analysis.session_id,
+                analysis.generated_at,
+                _dump(analysis),
+            )
+
+    async def get_report_analysis(self, session_id: str) -> ReportAnalysis | None:
+        pool = self._require_pool()
+        row = await pool.fetchrow(
+            "select data from report_analyses where session_id = $1",
+            session_id,
+        )
+        if row is None:
+            return None
+        return ReportAnalysis(**_load(row["data"]))
 
     # ── Invites ───────────────────────────────────────────────────────────
     async def put_invite(self, invite: Invite) -> None:
