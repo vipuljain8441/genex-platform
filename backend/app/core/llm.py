@@ -2,6 +2,7 @@
 
 Supports:
 - Groq via the native Groq SDK
+- Amazon Bedrock via the Bedrock Runtime Converse API
 - any OpenAI-compatible endpoint (for example a local Ollama server hosting
   `qwen2.5-coder:0.5b`)
 """
@@ -10,9 +11,12 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 from typing import Any
+from urllib.parse import quote, urlparse
 
+import httpx
 from groq import (
     APIStatusError as GroqAPIStatusError,
     AsyncGroq,
@@ -26,11 +30,13 @@ from app.core.config import settings
 
 _groq_client: AsyncGroq | None = None
 _openai_client: AsyncOpenAI | None = None
+_bedrock_client: Any | None = None
+_bedrock_http_client: Any | None = None
 log = logging.getLogger(__name__)
 
 
 def _provider() -> str:
-    return settings.llm_provider.strip().lower()
+    return settings.resolved_llm_provider
 
 
 def get_groq_client() -> AsyncGroq:
@@ -51,6 +57,66 @@ def get_openai_client() -> AsyncOpenAI:
             kwargs["base_url"] = settings.llm_api_base.rstrip("/")
         _openai_client = AsyncOpenAI(**kwargs)
     return _openai_client
+
+
+def get_bedrock_http_client() -> Any:
+    global _bedrock_http_client
+    if _bedrock_http_client is None:
+        _bedrock_http_client = httpx.AsyncClient(timeout=120.0)
+    return _bedrock_http_client
+
+
+def _import_bedrock_sdk() -> tuple[Any, Any]:
+    try:
+        import boto3
+        from botocore.exceptions import ClientError
+    except ImportError as exc:
+        raise RuntimeError(
+            "Bedrock support requires boto3. Install backend dependencies again "
+            "so boto3 is available."
+        ) from exc
+    return boto3, ClientError
+
+
+def get_bedrock_client() -> Any:
+    global _bedrock_client
+    if _bedrock_client is not None:
+        return _bedrock_client
+
+    region = settings.resolved_bedrock_region
+    if not region:
+        raise ValueError(
+            "Bedrock requires a region. Set BEDROCK_REGION, AWS_REGION, "
+            "AWS_DEFAULT_REGION, or an LLM_API_BASE with a Bedrock hostname."
+        )
+
+    boto3, _ = _import_bedrock_sdk()
+    auth_mode = settings.resolved_bedrock_auth_mode
+    api_key = settings.resolved_llm_api_key.strip()
+    has_iam_creds = bool(
+        settings.aws_access_key_id.strip() and settings.aws_secret_access_key.strip()
+    )
+    use_api_key = (
+        auth_mode == "api_key"
+        or (auth_mode == "auto" and not has_iam_creds and bool(api_key))
+    )
+    if use_api_key and api_key:
+        os.environ.setdefault("AWS_BEARER_TOKEN_BEDROCK", api_key)
+
+    kwargs: dict[str, Any] = {
+        "service_name": "bedrock-runtime",
+        "region_name": region,
+    }
+    if not use_api_key:
+        if settings.aws_access_key_id.strip():
+            kwargs["aws_access_key_id"] = settings.aws_access_key_id.strip()
+        if settings.aws_secret_access_key.strip():
+            kwargs["aws_secret_access_key"] = settings.aws_secret_access_key.strip()
+        if settings.aws_session_token.strip():
+            kwargs["aws_session_token"] = settings.aws_session_token.strip()
+
+    _bedrock_client = boto3.client(**kwargs)
+    return _bedrock_client
 
 
 _RATE_LIMIT_BACKOFF = (5, 15, 30)  # seconds between retries
@@ -100,6 +166,92 @@ def _groq_rate_limit_is_tpm(exc: Exception) -> bool:
     return "per minute" in s or "tokens per minute" in s or "tpm" in s
 
 
+def _bedrock_messages(
+    messages: list[dict],
+    *,
+    json_mode: bool,
+) -> tuple[list[dict[str, str]], list[dict[str, Any]]]:
+    system_blocks: list[dict[str, str]] = []
+    convo: list[dict[str, Any]] = []
+    for message in messages:
+        role = str(message.get("role") or "user").strip().lower()
+        content = str(message.get("content") or "")
+        if not content.strip():
+            continue
+        if role == "system":
+            system_blocks.append({"text": content})
+            continue
+        convo.append(
+            {
+                "role": "assistant" if role == "assistant" else "user",
+                "content": [{"text": content}],
+            }
+        )
+
+    if json_mode:
+        system_blocks.append(
+            {
+                "text": (
+                    "Return exactly one valid JSON object. "
+                    "Do not include markdown fences or commentary."
+                )
+            }
+        )
+    return system_blocks, convo
+
+
+def _bedrock_extract_text(response: dict[str, Any]) -> str:
+    content = (
+        (response.get("output") or {})
+        .get("message", {})
+        .get("content", [])
+    )
+    texts = [
+        block.get("text", "")
+        for block in content
+        if isinstance(block, dict) and block.get("text")
+    ]
+    return "\n".join(texts).strip()
+
+
+def _bedrock_runtime_endpoint(model: str) -> str:
+    configured = settings.llm_api_base.strip()
+    if configured:
+        parsed = urlparse(configured)
+        scheme = parsed.scheme or "https"
+        netloc = parsed.netloc or parsed.path
+        path = (parsed.path or "").rstrip("/")
+        if path.endswith("/v1"):
+            path = path[:-3]
+        base = f"{scheme}://{netloc}{path}"
+    else:
+        region = settings.resolved_bedrock_region
+        if not region:
+            raise ValueError("Bedrock requires a region or runtime base URL")
+        base = f"https://bedrock-runtime.{region}.amazonaws.com"
+    model_path = quote(model, safe="-._~")
+    return f"{base}/model/{model_path}/converse"
+
+
+def _bedrock_error_code(exc: Exception) -> str:
+    response = getattr(exc, "response", None)
+    if not isinstance(response, dict):
+        return ""
+    error = response.get("Error") or {}
+    if not isinstance(error, dict):
+        return ""
+    return str(error.get("Code") or "")
+
+
+def _bedrock_is_retryable(exc: Exception) -> bool:
+    return _bedrock_error_code(exc) in {
+        "ModelNotReadyException",
+        "ProvisionedThroughputExceededException",
+        "ThrottlingException",
+        "TooManyRequestsException",
+    }
+
+
 async def complete(
     system: str,
     user: str,
@@ -123,10 +275,128 @@ async def complete(
             messages, primary_model, max_tokens, temperature, json_mode
         )
 
+    if _provider() == "bedrock":
+        return await _complete_bedrock(
+            messages, primary_model, max_tokens, temperature, json_mode
+        )
+
     if _provider() in {"openai", "openai_compatible", "vllm"}:
         return await _complete_openai(messages, primary_model, max_tokens, temperature)
 
-    raise ValueError(f"Unsupported LLM_PROVIDER: {settings.llm_provider!r}")
+    raise ValueError(
+        f"Unsupported LLM provider/type: {settings.resolved_llm_provider!r}"
+    )
+
+
+async def _complete_bedrock(
+    messages: list[dict],
+    model: str,
+    max_tokens: int,
+    temperature: float,
+    json_mode: bool,
+) -> str:
+    system_blocks, convo = _bedrock_messages(messages, json_mode=json_mode)
+    if not convo:
+        raise ValueError("Bedrock request requires at least one non-system message")
+
+    auth_mode = settings.resolved_bedrock_auth_mode
+    has_iam_creds = bool(
+        settings.aws_access_key_id.strip() and settings.aws_secret_access_key.strip()
+    )
+    api_key = settings.resolved_llm_api_key.strip()
+    use_api_key = (
+        auth_mode == "api_key"
+        or (auth_mode == "auto" and not has_iam_creds and bool(api_key))
+    )
+
+    if use_api_key:
+        return await _complete_bedrock_with_api_key(
+            convo,
+            model,
+            max_tokens,
+            temperature,
+            system_blocks,
+        )
+
+    client = get_bedrock_client()
+    _, client_error = _import_bedrock_sdk()
+    last_err: Exception | None = None
+    for backoff in [0] + list(_RATE_LIMIT_BACKOFF):
+        if backoff:
+            log.warning("Bedrock rate limit or warm-up delay, retrying in %ds", backoff)
+            await asyncio.sleep(backoff)
+        try:
+            response = await asyncio.to_thread(
+                client.converse,
+                modelId=model,
+                system=system_blocks,
+                messages=convo,
+                inferenceConfig={
+                    "maxTokens": max_tokens,
+                    "temperature": temperature,
+                },
+            )
+            return _bedrock_extract_text(response)
+        except client_error as e:
+            last_err = e
+            if _bedrock_is_retryable(e):
+                continue
+            raise
+        except Exception:
+            raise
+    raise last_err  # type: ignore[misc]
+
+
+async def _complete_bedrock_with_api_key(
+    convo: list[dict[str, Any]],
+    model: str,
+    max_tokens: int,
+    temperature: float,
+    system_blocks: list[dict[str, str]],
+) -> str:
+    api_key = settings.resolved_llm_api_key.strip()
+    if not api_key:
+        raise ValueError("Bedrock API-key mode requires LLM_API_KEY")
+
+    client = get_bedrock_http_client()
+    url = _bedrock_runtime_endpoint(model)
+    payload: dict[str, Any] = {
+        "messages": convo,
+        "inferenceConfig": {
+            "maxTokens": max_tokens,
+            "temperature": temperature,
+        },
+    }
+    if system_blocks:
+        payload["system"] = system_blocks
+
+    last_err: Exception | None = None
+    for backoff in [0] + list(_RATE_LIMIT_BACKOFF):
+        if backoff:
+            log.warning("Bedrock API-key request retrying in %ds", backoff)
+            await asyncio.sleep(backoff)
+        try:
+            response = await client.post(
+                url,
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {api_key}",
+                },
+                json=payload,
+            )
+            response.raise_for_status()
+            return _bedrock_extract_text(response.json())
+        except httpx.HTTPStatusError as e:
+            last_err = e
+            status = e.response.status_code
+            if status in {408, 429, 500, 502, 503, 504}:
+                continue
+            detail = e.response.text[:500]
+            raise RuntimeError(f"Bedrock API-key request failed ({status}): {detail}") from e
+        except httpx.HTTPError as e:
+            last_err = e
+            continue
+    raise last_err  # type: ignore[misc]
 
 
 async def _complete_groq(

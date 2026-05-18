@@ -153,6 +153,7 @@ ollama list
 4. Set this in `backend/.env`:
 
 ```env
+LLM_TYPE=local
 LLM_PROVIDER=openai_compatible
 LLM_API_KEY=ollama
 LLM_MODEL=qwen2.5-coder:0.5b
@@ -161,7 +162,8 @@ LLM_API_BASE=http://localhost:11434/v1
 
 How it works:
 
-- `LLM_PROVIDER=openai_compatible` makes the backend talk to an OpenAI-style API
+- `LLM_TYPE=local` makes it explicit that this is the local/OpenAI-compatible path
+- `LLM_PROVIDER=openai_compatible` keeps backward compatibility with the existing client
 - `LLM_API_BASE=http://localhost:11434/v1` points to Ollama
 - `LLM_MODEL=qwen2.5-coder:0.5b` tells the app which local model to use
 
@@ -177,33 +179,44 @@ ollama pull qwen2.5-coder:1.5b
 LLM_MODEL=qwen2.5-coder:1.5b
 ```
 
-#### Option C: Use Amazon Bedrock with the OpenAI-compatible endpoint
+#### Option C: Use Amazon Bedrock natively
 
-Amazon Bedrock provides OpenAI-compatible inference endpoints, so this project can use Bedrock without changing the agent code.
+The backend also supports Amazon Bedrock directly through the Bedrock Runtime `Converse` API. This is the recommended path if you want to authenticate with IAM credentials.
 
-Set your Bedrock API key in the shell:
-
-```bash
-export AWS_BEARER_TOKEN_BEDROCK=your_bedrock_api_key
-```
-
-Then set this in `backend/.env`:
+Set this in `backend/.env`:
 
 ```env
-LLM_PROVIDER=openai_compatible
-LLM_MODEL=your_bedrock_model_id
-LLM_API_BASE=https://bedrock-mantle.<your-region>.api.aws/v1
+LLM_TYPE=bedrock
+LLM_PROVIDER=bedrock
+LLM_MODEL=global.anthropic.claude-sonnet-4-6
+BEDROCK_REGION=ap-south-1
+BEDROCK_AUTH_MODE=iam
+AWS_ACCESS_KEY_ID=your_access_key_id
+AWS_SECRET_ACCESS_KEY=your_secret_access_key
+AWS_SESSION_TOKEN=
 LLM_API_KEY=
+```
+
+If you prefer an Amazon Bedrock API key instead of IAM credentials:
+
+```env
+LLM_TYPE=bedrock
+LLM_PROVIDER=bedrock
+LLM_MODEL=global.anthropic.claude-sonnet-4-6
+BEDROCK_REGION=ap-south-1
+BEDROCK_AUTH_MODE=api_key
+LLM_API_KEY=your_bedrock_api_key
 ```
 
 How it works:
 
-- `LLM_PROVIDER=openai_compatible` keeps the existing OpenAI-style client
-- `LLM_API_BASE` points the app to the Amazon Bedrock OpenAI-compatible endpoint
-- if `LLM_API_KEY` is empty, the backend now falls back to `AWS_BEARER_TOKEN_BEDROCK`
-- `LLM_MODEL` should be the Bedrock model ID you want to use
+- `LLM_TYPE=bedrock` switches the backend onto the native Bedrock path
+- `BEDROCK_AUTH_MODE=iam` uses AWS credentials and the normal AWS credential chain
+- `BEDROCK_AUTH_MODE=api_key` uses the Bedrock API key path
+- `LLM_MODEL` should be a Bedrock model ID or inference profile ID
+- `BEDROCK_REGION` is required unless `AWS_REGION`, `AWS_DEFAULT_REGION`, or a Bedrock URL already implies the region
 
-This works both locally and on EC2 as long as `AWS_BEARER_TOKEN_BEDROCK` is exported in the environment where the backend process starts.
+This works locally, in Docker, or on EC2. If you already rely on an instance role or a shared AWS profile, you can leave `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` unset and let the AWS SDK resolve credentials automatically.
 
 ### Docker Compose with Bedrock
 
@@ -213,10 +226,13 @@ Export your public host and Bedrock settings first:
 
 ```bash
 export PUBLIC_HOST=localhost
-export LLM_PROVIDER=openai_compatible
-export LLM_API_BASE=https://bedrock-mantle.ap-south-1.api.aws/v1
-export LLM_MODEL=qwen.qwen3-coder-30b-a3b-instruct
-export AWS_BEARER_TOKEN_BEDROCK=your_bedrock_api_key
+export LLM_TYPE=bedrock
+export LLM_PROVIDER=bedrock
+export BEDROCK_REGION=ap-south-1
+export LLM_MODEL=global.anthropic.claude-sonnet-4-6
+export BEDROCK_AUTH_MODE=iam
+export AWS_ACCESS_KEY_ID=your_access_key_id
+export AWS_SECRET_ACCESS_KEY=your_secret_access_key
 ```
 
 Then start the stack:
@@ -228,7 +244,7 @@ docker compose -f docker-compose2.yml up --build
 Notes:
 
 - `docker-compose2.yml` does not include Ollama.
-- If you prefer, you can export `LLM_API_KEY` instead of `AWS_BEARER_TOKEN_BEDROCK`.
+- If you prefer the Bedrock API key flow, set `BEDROCK_AUTH_MODE=api_key` and export `LLM_API_KEY`.
 - For EC2, set `PUBLIC_HOST` to your public IP or domain before starting the stack.
 
 Now start the API:

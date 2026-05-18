@@ -4,6 +4,7 @@ pydantic==2.10.3
 pydantic-settings==2.7.0
 groq==0.13.0
 openai==1.58.1
+boto3==1.43.5
 python-multipart==0.0.20
 websockets==14.1
 httpx==0.28.1
