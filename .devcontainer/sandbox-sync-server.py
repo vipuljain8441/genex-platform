@@ -10,6 +10,7 @@ The GenEx backend (running anywhere) calls this API to:
   - Git commit snapshot    POST /commit/{session_id}
   - Git diff               GET  /diff/{session_id}
   - Run SQL query          POST /sql/{session_id}
+  - Execute commands       POST /exec/{session_id}
 """
 from __future__ import annotations
 
@@ -18,12 +19,15 @@ import os
 import shutil
 import sqlite3
 import subprocess
+import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 SESSIONS_ROOT = Path(os.getenv("SESSIONS_ROOT", "/home/coder/sessions"))
 SKIP_DIRS = {".git", "__pycache__", "node_modules", ".idea", ".venv"}
 SKIP_FILES = {".DS_Store", "Thumbs.db"}
+RUN_TIMEOUT_SECONDS = 10
+RUN_OUTPUT_CAP = 8000
 
 GIT_ENV = {
     **os.environ,
@@ -171,6 +175,95 @@ def _run_sql(session_dir: Path, query: str) -> dict:
         conn.close()
 
 
+def _command_env(session_dir: Path) -> dict[str, str]:
+    return {
+        **os.environ,
+        "HOME": str(session_dir),
+        "GENEX_SESSION_ROOT": str(session_dir),
+        "GENEX_SESSION_ID": session_dir.name,
+        "PYTHONUNBUFFERED": "1",
+        "PIP_DISABLE_PIP_VERSION_CHECK": "1",
+    }
+
+
+def _run_command(
+    session_dir: Path,
+    argv: list[str],
+    *,
+    command: str = "",
+    timeout_seconds: int = RUN_TIMEOUT_SECONDS,
+    output_cap: int = RUN_OUTPUT_CAP,
+) -> dict[str, object]:
+    cleaned = [str(part) for part in argv if str(part).strip()]
+    display_command = command.strip() or " ".join(cleaned)
+    if not cleaned:
+        return {
+            "stdout": "",
+            "stderr": "No command provided.",
+            "exit_code": -1,
+            "duration_ms": 0,
+            "command": display_command,
+            "timed_out": False,
+            "unsupported": True,
+        }
+
+    env = _command_env(session_dir)
+    if shutil.which(cleaned[0], path=env.get("PATH")) is None:
+        return {
+            "stdout": "",
+            "stderr": f"Runtime '{cleaned[0]}' not found on PATH.",
+            "exit_code": -1,
+            "duration_ms": 0,
+            "command": display_command,
+            "timed_out": False,
+            "unsupported": True,
+        }
+
+    started = time.monotonic()
+    try:
+        proc = subprocess.run(
+            cleaned,
+            cwd=session_dir,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+            env=env,
+        )
+        stdout = proc.stdout
+        stderr = proc.stderr
+        exit_code = proc.returncode
+        timed_out = False
+        unsupported = False
+    except FileNotFoundError as exc:
+        stdout = ""
+        stderr = f"Failed to start runtime: {exc}"
+        exit_code = -1
+        timed_out = False
+        unsupported = True
+    except subprocess.TimeoutExpired as exc:
+        stdout = (exc.stdout or b"")
+        stderr = (exc.stderr or b"")
+        if isinstance(stdout, bytes):
+            stdout = stdout.decode("utf-8", errors="replace")
+        if isinstance(stderr, bytes):
+            stderr = stderr.decode("utf-8", errors="replace")
+        stderr = f"{stderr}\n--- timed out after {timeout_seconds}s ---\n".strip()
+        exit_code = -1
+        timed_out = True
+        unsupported = False
+
+    duration_ms = int((time.monotonic() - started) * 1000)
+    return {
+        "stdout": str(stdout)[:output_cap],
+        "stderr": str(stderr)[:output_cap],
+        "exit_code": exit_code,
+        "duration_ms": duration_ms,
+        "command": display_command,
+        "timed_out": timed_out,
+        "unsupported": unsupported,
+    }
+
+
 # ── HTTP handler ───────────────────────────────────────────────────────────────
 
 class Handler(BaseHTTPRequestHandler):
@@ -243,7 +336,7 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self._err(404, "not found")
 
-    # POST /commit/{session_id}   or   POST /sql/{session_id}
+    # POST /commit/{session_id}   or   POST /sql/{session_id}   or   POST /exec/{session_id}
     def do_POST(self) -> None:
         parts = self._parts()
         if len(parts) < 2:
@@ -266,6 +359,25 @@ class Handler(BaseHTTPRequestHandler):
             if not query.strip():
                 self._err(400, "empty query"); return
             self._ok(_run_sql(sd, query))
+
+        elif op == "exec":
+            if not sd.exists():
+                self._err(404, "session not found"); return
+            argv = body.get("argv", [])
+            if not isinstance(argv, list):
+                self._err(400, "argv must be a list"); return
+            command = str(body.get("command", "") or "")
+            timeout_seconds = int(body.get("timeout_seconds", RUN_TIMEOUT_SECONDS) or RUN_TIMEOUT_SECONDS)
+            output_cap = int(body.get("output_cap", RUN_OUTPUT_CAP) or RUN_OUTPUT_CAP)
+            self._ok(
+                _run_command(
+                    sd,
+                    [str(part) for part in argv],
+                    command=command,
+                    timeout_seconds=max(1, timeout_seconds),
+                    output_cap=max(256, output_cap),
+                )
+            )
 
         else:
             self._err(404, "not found")

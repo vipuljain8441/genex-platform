@@ -36,7 +36,7 @@ Last reviewed: 2026-05-17
 | `/api/candidate/sessions` | `POST` | direct session creation | store |
 | `/api/candidate/sessions/{id}` | `GET` | fetch session workspace | store |
 | `/api/candidate/sessions/{id}/files` | `PUT` | save one file | store |
-| `/api/candidate/sessions/{id}/run` | `POST` | execute current file | local subprocess |
+| `/api/candidate/sessions/{id}/run` | `POST` | execute current file | sandbox sync server |
 | `/api/candidate/sessions/{id}/submit` | `POST` | evaluate final workspace | evaluator |
 | `/api/buddy/ask` | `POST` | get hint/edit proposal | buddy agent, store |
 | `/api/buddy/history/{id}` | `GET` | fetch buddy turns | store |
@@ -125,7 +125,7 @@ Current code status:
 | Jira Cloud backlog analysis | `backend/app/services/jira.py`, employer route | active | fetches backlog slice and derives recruiter context; credentials are not persisted |
 | Resend | `backend/app/services/email.py` | optional | graceful fallback when unset |
 | PM tools | extractor prompt + `pm_tool` field | partial | Jira backlog analysis is live; Linear remains mocked |
-| Runtime execution | `candidate.py` run endpoint | local-only | unsafe for production workloads |
+| Runtime execution | `candidate.py` run endpoint | sandbox-backed | executes inside the candidate workspace container |
 | WebSockets | employer + monitor routes | active | used for pipeline/events, results still poll |
 
 ## 9. Improvement Hotspot Matrix

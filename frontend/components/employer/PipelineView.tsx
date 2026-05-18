@@ -380,7 +380,7 @@ export function PipelineView({ initial }: { initial: Assessment }) {
                       {session.has_evaluation ? (
                         <Link href={session.report_url}>
                           <Button size="sm" variant="outline">
-                            Open report
+                            Open preview
                           </Button>
                         </Link>
                       ) : (
@@ -440,7 +440,7 @@ export function PipelineView({ initial }: { initial: Assessment }) {
                       {item.has_evaluation ? (
                         <Link href={item.report_url}>
                           <Button size="sm" variant="outline">
-                            Open report
+                            Open preview
                           </Button>
                         </Link>
                       ) : (

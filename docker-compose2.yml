@@ -30,6 +30,7 @@ services:
     environment:
       PASSWORD: ""
       SYNC_PORT: "8081"
+      GENEX_REPORT_URL: http://backend:8000
     command: >-
       --bind-addr 0.0.0.0:8080
       --auth none

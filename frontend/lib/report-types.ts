@@ -374,3 +374,39 @@ export type ReportData = {
   playback_url: string;
   heatmap: Heatmap;
 };
+
+export type ReportPreviewSnapshot = {
+  fixed_bugs: number;
+  total_bugs: number;
+  ai_prompt_count: number;
+  files_touched: number;
+  terminal_commands: number;
+  highlights: string[];
+};
+
+export type ReportPreviewData = {
+  available: boolean;
+  header: CandidateHeader;
+  cq: CQOverview | null;
+  metrics: MetricScore[];
+  snapshot: ReportPreviewSnapshot;
+  lock_reason: string;
+  unlock_label: string;
+};
+
+export type ReportEvidence = {
+  label: string;
+  detail: string;
+};
+
+export type ReportAnalysis = {
+  session_id: string;
+  summary: string;
+  recommendation: "strong_yes" | "lean_yes" | "mixed" | "lean_no";
+  confidence: number;
+  highlights: string[];
+  risks: string[];
+  interview_focus: string[];
+  evidence: ReportEvidence[];
+  generated_at: string;
+};

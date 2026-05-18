@@ -1,4 +1,4 @@
-import type { ReportData } from "./report-types";
+import type { ReportAnalysis, ReportData, ReportPreviewData } from "./report-types";
 
 const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 const WS = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8000";
@@ -370,6 +370,15 @@ export const api = {
     }>(`/api/results/${sid}`),
   getReport: (sid: string) =>
     http<ReportData>(`/api/results/${sid}/report`),
+  getReportPreview: (sid: string) =>
+    http<ReportPreviewData>(`/api/results/${sid}/report-preview`),
+  getReportAnalysis: (sid: string) =>
+    http<ReportAnalysis | null>(`/api/results/${sid}/report-analysis`),
+  generateReportAnalysis: (sid: string, force_refresh = false) =>
+    http<ReportAnalysis>(`/api/results/${sid}/report-analysis`, {
+      method: "POST",
+      body: JSON.stringify({ force_refresh }),
+    }),
 
   // ── GitHub ──────────────────────────────────────────────────────────────
   getGitHubInfo: (repo_url: string) =>
