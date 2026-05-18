@@ -36,6 +36,7 @@ class Settings(BaseSettings):
     groq_api_key: str = ""
     groq_model: str = ""
     allow_origins: str = "http://localhost:3000"
+    allow_origin_regex: str = ""
     log_level: str = "INFO"
 
     # Where the candidate-facing app lives. Embedded in invite emails.
